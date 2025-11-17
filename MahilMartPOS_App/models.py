@@ -13,6 +13,7 @@ class Category(models.Model):
 
     def __str__(self):
         return self.name
+    
    
 class Supplier(models.Model):
     supplier_id = models.CharField(max_length=50, unique=True, null=True, blank=True)
@@ -201,25 +202,64 @@ class BillingPayment(models.Model):
         return f"Payment {self.id} for {self.bill_no}"
     
 class BillType(models.Model):
-    billtype_id = models.IntegerField(unique=True)
+    billtype_id = models.IntegerField(unique=True)   # editable=True now
     billtype = models.CharField(max_length=100)
+
+    def save(self, *args, **kwargs):
+        if not self.billtype_id:
+            existing = BillType.objects.values_list("billtype_id", flat=True).order_by("billtype_id")
+            n = 1
+            for i in existing:
+                if i != n:
+                    break
+                n += 1
+            self.billtype_id = n
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.billtype
+
+
     
 class PaymentMode(models.Model):
-    mode_id = models.IntegerField(unique=True)
-    mode_name = models.CharField(max_length=50, unique=True)
+    mode_id = models.IntegerField(unique=True)    # editable=True
+    mode_name = models.CharField(max_length=100)
+
+    def save(self, *args, **kwargs):
+        if not self.mode_id:
+            existing = PaymentMode.objects.values_list("mode_id", flat=True).order_by("mode_id")
+            n = 1
+            for i in existing:
+                if i != n:
+                    break
+                n += 1
+            self.mode_id = n
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.mode_name
+
+
     
 class Counter(models.Model):
-    counter_id = models.IntegerField(unique=True)
-    counter_name = models.CharField(max_length=50, unique=True)
+    counter_id = models.IntegerField(unique=True)   # editable=True
+    counter_name = models.CharField(max_length=100)
+
+    def save(self, *args, **kwargs):
+        if not self.counter_id:
+            existing = Counter.objects.values_list("counter_id", flat=True).order_by("counter_id")
+            n = 1
+            for i in existing:
+                if i != n:
+                    break
+                n += 1
+            self.counter_id = n
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.counter_name
+
+
 
 class PointsConfig(models.Model):
     amount_for_one_point = models.DecimalField(max_digits=10, decimal_places=2, default=200)

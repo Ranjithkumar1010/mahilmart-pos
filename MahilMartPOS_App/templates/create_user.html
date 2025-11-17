@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Create New User{% endblock %}
+{% block content %}
+<style>
+:root {
+  --primary: #2e3b4e;
+  /* --primary-light: #f0f6ff; */
+  --primary-dark: #1f2a38;
+  --border: #d4d4d4;
+  --text: #222;
+  --white: #fff;
+}
+
+/* FORM BOX */
+.form-box {
+  max-width: 600px;
+  margin: 50px auto;
+  background: var(--white);
+  padding: 30px;
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+  font-family: 'Poppins', sans-serif;
+}
+
+.form-box h2 {
+  color: var(--primary-dark);
+  margin-bottom: 25px;
+  text-align: center;
+  font-weight: 700;
+}
+
+/* LABELS */
+.form-box label {
+  font-weight: 600;
+  margin-top: 14px;
+  display: block;
+  color: var(--text);
+}
+
+/* INPUTS (NORMAL STATE = WHITE) */
+.form-box input,
+.form-box select {
+  width: 100%;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--white);        /* FIXED */
+  font-size: 1rem;
+  transition: 0.2s;
+  color: var(--text);
+}
+
+/* HOVER — Slight color only */
+.form-box input:hover,
+.form-box select:hover {
+  background: #f0f6ff;   /* very light */
+}
+
+/* FOCUS — Slight color + border only */
+.form-box input:focus,
+.form-box select:focus {
+  border-color: var(--primary);
+  background:  #f0f6ff;
+  outline: none;
+}
+
+/* AUTOFILL FIX — keep it white */
+input:-webkit-autofill {
+  background-color: var(--white) !important;
+  -webkit-box-shadow: 0 0 0 1000px var(--white) inset !important;
+}
+
+/* BUTTON */
+.form-box button {
+  width: 100%;
+  padding: 12px;
+  background: var(--primary);
+  border: none;
+  color: white;
+  font-size: 1.1rem;
+  font-weight: 600;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.form-box button:hover {
+  background: var(--primary-dark);
+}
+</style>
+
+
+
+<div class="form-box">
+  <h2>Create New User</h2>
+  <form method="POST">
+    {% csrf_token %}
+    <label>Username</label>
+    <input type="text" name="username" required>
+
+    <label>Email</label>
+    <input type="email" name="email">
+
+    <label>Password</label>
+    <input type="password" name="password" required>
+
+    <label>Role</label>
+    <select name="role">
+      <option value="">Normal User</option>
+      <option value="staff">Staff</option>
+      <option value="admin">Admin</option>
+    </select>
+
+    <button type="submit">➕ Create User</button>
+  </form>
+</div>
+{% endblock %}

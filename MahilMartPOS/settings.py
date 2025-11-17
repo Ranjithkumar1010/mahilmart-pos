@@ -26,7 +26,7 @@ SECRET_KEY = 'django-insecure-m$j%wqpm)dqy8!erkd_^9hh#4-f29io_)_@zf&+68d1b81fc*)
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['192.168.0.105','127.0.0.1']
+ALLOWED_HOSTS = ['192.168.0.105','127.0.0.1','192.168.0.123']
 # ALLOWED_HOSTS = ['*']
 
 # Application definition
@@ -71,6 +71,10 @@ TEMPLATES = [
 WSGI_APPLICATION = 'MahilMartPOS.wsgi.application'
 
 
+
+
+
+
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
@@ -79,8 +83,8 @@ DATABASES = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'mmpos',
         'USER': 'postgres',
-        'PASSWORD': 'admin123',
-        'HOST': '192.168.0.105',
+        'PASSWORD': 'Praveen',
+        'HOST': 'localhost',
         'PORT': '5432',    
     }
 }

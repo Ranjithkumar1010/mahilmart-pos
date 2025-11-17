@@ -7,6 +7,15 @@ urlpatterns = [
     # login page
     path('', views.login_view, name='home'),
 
+
+    #create user
+    path('users/create/', views.create_user, name='create_user'),
+    path("settings/admin/", views.update_admin_settings, name="settings_page"),
+    path("settings/users/<int:user_id>/edit/", views.edit_user, name="edit_user"),
+    path("settings/users/<int:user_id>/delete/", views.delete_user, name="delete_user"),
+    path("ajax/search-users/", views.ajax_search_users, name="ajax_search_users"),
+
+
     # dashboard page
     path('dashboard/', views.dashboard_view, name='dashboard'),
     path('generate-report/', views.generate_report, name='generate_report'),

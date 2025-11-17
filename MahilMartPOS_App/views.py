@@ -54,6 +54,8 @@ from django.contrib.auth.models import User, Group
 from django.contrib.sessions.models import Session
 from django.http import HttpResponse
 import io
+from django.http import JsonResponse
+from django.template.loader import render_to_string
 from barcode import Code128
 from barcode.writer import ImageWriter
 from .models import (
@@ -105,6 +107,115 @@ def login_view(request):
             return render(request, 'home.html', {'error': 'Invalid credentials'})
     
     return render(request, 'home.html')
+
+@login_required
+def create_user(request):
+    if (request.method == 'POST'):
+        username = request.POST['username']
+        email = request.POST.get('email')
+        password = request.POST['password']
+        role = request.POST.get('role')
+        if User.objects.filter(username=username).exists():
+            messages.error(request, 'Username already exists.')
+            return redirect('create_user')
+        user = User.objects.create_user(username=username, email=email, password=password)
+        if (role == 'staff'):
+            user.is_staff = True
+        elif (role == 'admin'):
+            user.is_staff = True
+            user.is_superuser = True
+        user.save()
+        messages.success(request, 'User created successfully.')
+        return redirect('settings_page')
+    return render(request, 'create_user.html')
+
+
+
+# ======================
+# USER LIST (user_settings.html)
+# ======================
+@user_passes_test((lambda u: u.is_superuser))
+def update_admin_settings(request):
+    query = request.GET.get('q')
+    sort_by = request.GET.get('sort', 'id')
+    role = request.GET.get('role')
+
+    users = User.objects.all()
+
+    if query:
+        users = users.filter(Q(username__icontains=query) | Q(email__icontains=query))
+
+    if role == 'admin':
+        users = users.filter(is_superuser=True)
+    elif role == 'staff':
+        users = users.filter(is_staff=True)
+
+    if sort_by in ['id', 'username', 'email', 'is_staff', 'is_superuser']:
+        users = users.order_by(sort_by)
+
+    paginator = Paginator(users, 10)
+    page_obj = paginator.get_page(request.GET.get('page'))
+
+    return render(request, 'user_settings.html', {
+        'page_obj': page_obj,
+        'query': query,
+        'sort_by': sort_by,
+        'role': role
+    })
+
+
+# ======================
+# EDIT USER
+# ======================
+@user_passes_test(lambda u: u.is_superuser)
+def edit_user(request, user_id):
+    user = get_object_or_404(User, id=user_id)
+
+    if request.method == "POST":
+        user.username = request.POST.get("username")
+        user.email = request.POST.get("email")
+
+        user.is_staff = True if request.POST.get("is_staff") == "on" else False
+        user.is_superuser = True if request.POST.get("is_superuser") == "on" else False
+
+        password = request.POST.get("password")
+        if password:
+            user.set_password(password)
+
+        user.save()
+        return redirect("settings_page")
+
+    return render(request, "edit_user.html", {"user": user})
+
+
+# ======================
+# DELETE USER
+# ======================
+@user_passes_test(lambda u: u.is_superuser)
+def delete_user(request, user_id):
+    user = get_object_or_404(User, id=user_id)
+    user.delete()
+    return redirect("settings_page")
+
+@user_passes_test(lambda u: u.is_superuser)
+def ajax_search_users(request):
+    query = request.GET.get("q", "").strip()
+    
+    users = User.objects.all()
+
+    if len(query) >= 3:
+        users = users.filter(
+            Q(username__icontains=query) |
+            Q(email__icontains=query)
+        )
+
+    html = render_to_string(
+        "partials/user_table_rows.html", 
+        {"users": users}
+    )
+
+    return JsonResponse({"html": html})
+
 
 
 def custom_permission_denied_view(request, exception=None):
@@ -986,48 +1097,104 @@ def get_itemname_info(request):
 
     return JsonResponse({'suggestions': suggestions})
 
-@access_required(allowed_roles=['superuser'])
+@access_required(allowed_roles=['superuser','staff'])
 def add_billtype(request):
+
+    # -----------------------------
+    # Auto ID helper functions
+    # -----------------------------
+    def get_next_billtype_id():
+        existing = BillType.objects.values_list("billtype_id", flat=True).order_by("billtype_id")
+        n = 1
+        for i in existing:
+            if i != n:
+                break
+            n += 1
+        return n
+
+    def get_next_mode_id():
+        existing = PaymentMode.objects.values_list("mode_id", flat=True).order_by("mode_id")
+        n = 1
+        for i in existing:
+            if i != n:
+                break
+            n += 1
+        return n
+
+    def get_next_counter_id():
+        existing = Counter.objects.values_list("counter_id", flat=True).order_by("counter_id")
+        n = 1
+        for i in existing:
+            if i != n:
+                break
+            n += 1
+        return n
+
+    # -----------------------------
+    # INITIAL EMPTY FORMS
+    # -----------------------------
     billtype_form = BillTypeForm()
     paymentmode_form = PaymentModeForm()
     counter_form = CounterForm()
-    points_config = PointsConfig.objects.first()  # fetch the config
-    points_form = PointsConfigForm(instance=points_config) 
+    points_config = PointsConfig.objects.first()
+    points_form = PointsConfigForm(instance=points_config)
 
+    # -----------------------------
+    # PREFILL AUTO-ID VALUES
+    # -----------------------------
+    billtype_form.initial["billtype_id"] = get_next_billtype_id()
+    paymentmode_form.initial["mode_id"] = get_next_mode_id()
+    counter_form.initial["counter_id"] = get_next_counter_id()
+
+    # -----------------------------
+    # HANDLE POST REQUESTS
+    # -----------------------------
     if request.method == "POST":
+
+        # Save Bill Type
         if "save_billtype" in request.POST:
-            billtype_form = BillTypeForm(request.POST)
-            if billtype_form.is_valid():
-                billtype_form.save()
+            form = BillTypeForm(request.POST)
+            if form.is_valid():
+                form.save()
                 return redirect("add")
 
-        elif "save_paymentmode" in request.POST:  # PaymentMode form submitted
-            paymentmode_form = PaymentModeForm(request.POST)
-            if paymentmode_form.is_valid():
-                paymentmode_form.save()
+        # Save Payment Mode
+        elif "save_paymentmode" in request.POST:
+            form = PaymentModeForm(request.POST)
+            if form.is_valid():
+                form.save()
                 return redirect("add")
 
-        elif "save_counter" in request.POST:  # Counter form submitted
-            counter_form = CounterForm(request.POST)
-            if counter_form.is_valid():
-                counter_form.save()
+        # Save Counter
+        elif "save_counter" in request.POST:
+            form = CounterForm(request.POST)
+            if form.is_valid():
+                form.save()
                 return redirect("add")
-            
+
+        # Save Points Config
         elif "save_points" in request.POST:
-            points_form = PointsConfigForm(request.POST)
-            if points_form.is_valid():
-                points_form.save()
+            form = PointsConfigForm(request.POST)
+            if form.is_valid():
+                form.save()
                 return redirect("add")
-        
+
+        # Save Billing Config
         elif "save_billing_config" in request.POST:
             billing_config, created = BillingConfig.objects.get_or_create(id=1)
             form = BillingConfigForm(request.POST, instance=billing_config)
             if form.is_valid():
                 form.save()
                 return redirect("add")
-            
-    billing_config, _ = BillingConfig.objects.get_or_create(id=1)           
-                                
+
+    # -----------------------------
+    # BILLING CONFIG (ALWAYS LOAD)
+    # -----------------------------
+    billing_config, _ = BillingConfig.objects.get_or_create(id=1)
+
+    # -----------------------------
+    # RENDER TEMPLATE
+    # -----------------------------
     return render(request, "add_billtype.html", {
         "billtype_form": billtype_form,
         "paymentmode_form": paymentmode_form,
@@ -1035,6 +1202,7 @@ def add_billtype(request):
         "points_form": points_form,
         "config": billing_config,
     })
+
 
 def order_payments(request, order_id):
     payments = Order.objects.filter(order_id=order_id).values(
@@ -1045,7 +1213,7 @@ def order_payments(request, order_id):
     payments_list = list(payments)
     return JsonResponse({'payments': payments_list})
 
-@access_required(allowed_roles=['superuser'])
+@access_required(allowed_roles=['superuser','staff'])
 def billing_edit(request, pk):
     bill = get_object_or_404(Billing, pk=pk)
 
@@ -1057,7 +1225,7 @@ def billing_edit(request, pk):
     total_paid = bill.received or Decimal('0')
 
     # FIXED: Discount apply as percentage
-    discounted_total = (bill.total_amount or Decimal('0')) - (
+    discounted_total = (bill.total_amount or Decimal('0')) - (   
         (bill.total_amount or Decimal('0')) * (bill.discount or Decimal('0')) / 100
     )
 
@@ -1241,7 +1409,7 @@ def get_payments(request, billing_id):
         })
     return JsonResponse({'payments': data})
 
-@access_required(allowed_roles=['superuser'])
+@access_required(allowed_roles=['superuser','staff'])
 def order_view(request):
     return render(request, 'order.html')
 
@@ -1655,7 +1823,7 @@ def convert_quotation_to_order(request, qtn_no):
 
     return redirect('order_list')
 
-@access_required(allowed_roles=['superuser'])
+@access_required(allowed_roles=['superuser','staff'])
 def item_creation(request):  
     if request.method == "POST":
         code = request.POST.get('code')
@@ -1770,7 +1938,7 @@ def fetch_item_by_code(request):
     except Item.DoesNotExist:
         return JsonResponse({'exists': False})
     
-@access_required(allowed_roles=['superuser'])
+@access_required(allowed_roles=['superuser','staff'])
 def items_list(request):
     query_name = request.GET.get('name', '').strip()
     query_code = request.GET.get('code', '').strip()
@@ -1790,7 +1958,7 @@ def items_list(request):
     }
     return render(request, 'items_list.html', context) 
 
-@access_required(allowed_roles=['superuser'])  # if you want access control
+@access_required(allowed_roles=['superuser','staff'])  # if you want access control
 def delete_item(request, item_id):
     item = get_object_or_404(Item, id=item_id)
 
@@ -1802,7 +1970,7 @@ def delete_item(request, item_id):
     messages.error(request, "Invalid request method.")
     return redirect('items_list')
     
-@access_required(allowed_roles=['superuser'])    
+@access_required(allowed_roles=['superuser','staff'])    
 @csrf_exempt
 def check_item_code(request):
     code = request.GET.get("code", "").strip()
@@ -2033,7 +2201,7 @@ def get_itemname1_info(request):
 
     return JsonResponse({"suggestions": list(item_dict.values())})
 
-@access_required(allowed_roles=['superuser'])
+@access_required(allowed_roles=['superuser','staff'])
 def Unit_creation(request):
     if request.method == 'POST':
         unit_name = request.POST.get('unit_name')
@@ -2058,7 +2226,7 @@ def Unit_creation(request):
 
     return render(request, 'unit.html')
 
-@access_required(allowed_roles=['superuser'])
+@access_required(allowed_roles=['superuser','staff'])
 def Group_creation(request):
     if request.method == 'POST':
         group_name = request.POST.get('group_name')
@@ -2193,193 +2361,165 @@ def sale_return_view(request):
     billing_items = []
     error = None
 
-    # Initialize form fields variables to pass to template
-    bill_no = ''
-    customer_name = ''
-    customer_phone = ''
+    # form-field values to keep inputs sticky
+    bill_no = ""
+    customer_name = ""
+    customer_phone = ""
 
+    # Always compute sale_returns for the page footer/list
+    start_date = request.GET.get('start_date')
+    end_date = request.GET.get('end_date')
+    sale_returns_qs = SaleReturn.objects.select_related('billing', 'customer')
+
+    if start_date and end_date:
+        sd = parse_date(start_date)
+        ed = parse_date(end_date)
+        if sd and ed:
+            sale_returns_qs = sale_returns_qs.filter(created_at__date__range=(sd, ed))
+    sale_returns_qs = sale_returns_qs.order_by('-created_at')
+
+    # -------------------------
+    # Handle POST actions
+    # -------------------------
     if request.method == "POST":
-        if "fetch_bill" in request.POST:
-            bill_no = request.POST.get("bill_no", "").strip()
-            customer_name = request.POST.get("customer_name", "").strip()
-            customer_phone = request.POST.get("customer_phone", "").strip()
+        # get sticky values from POST (so template can re-fill inputs)
+        bill_no = request.POST.get("bill_no", "").strip()
+        customer_name = request.POST.get("customer_name", "").strip()
+        customer_phone = request.POST.get("customer_phone", "").strip()
 
+        # DEBUG: log which button was pressed
+        # (watch server console when you click Fetch)
+        print("POST received. keys:", list(request.POST.keys()))
+
+        # -------- Fetch Bill (no redirect) ----------
+        if "fetch_bill" in request.POST:
+            print("DEBUG: fetch_bill pressed, bill_no:", bill_no)
             if not bill_no:
                 error = "Please enter the Bill Number."
             else:
                 billings = Billing.objects.filter(bill_no=bill_no)
-                if customer_name or customer_phone:
-                    billings = billings.filter(
-                        Q(customer__name__icontains=customer_name) if customer_name else Q(),
-                        Q(customer__cell__icontains=customer_phone) if customer_phone else Q()
-                    )
+
+                if customer_name:
+                    billings = billings.filter(customer__name__icontains=customer_name)
+
+                if customer_phone:
+                    billings = billings.filter(customer__cell__icontains=customer_phone)
+
                 if billings.exists():
-                    # Redirect to GET with params to avoid resubmission on refresh
-                    params = f"?bill_no={bill_no}&customer_name={customer_name}&customer_phone={customer_phone}"
-                    url = reverse('sale_return')
-                    return redirect(url + params)
+                    billing = billings.first()
+                    billing_items = BillingItem.objects.filter(billing_id=billing.id)
+                    print(f"DEBUG: Found billing id={billing.id}, items={billing_items.count()}")
                 else:
                     error = "No billing found matching the given criteria."
+                    print("DEBUG: No billing found for", bill_no)
 
+        # -------- Process Return ----------
         elif "process_return" in request.POST:
+            print("DEBUG: process_return pressed")
             billing_id = request.POST.get("billing_id")
             return_reason = request.POST.get("return_reason", "").strip()
-            billing = Billing.objects.get(id=billing_id)
-            billing_items = BillingItem.objects.filter(billing_id=billing.id)
 
-            # Create SaleReturn with temporary 0 values
-            sale_return = SaleReturn.objects.create(
-                billing=billing,
-                customer=billing.customer,
-                return_reason=return_reason,
-                total_return_qty=Decimal('0.00'),
-                total_refund_amount=Decimal('0.00')
-            )
+            if not billing_id:
+                messages.error(request, "Billing id missing.")
+            else:
+                billing = get_object_or_404(Billing, id=billing_id)
+                billing_items = BillingItem.objects.filter(billing_id=billing.id)
 
-            total_qty = Decimal('0.00')
-            total_amount = Decimal('0.00')
+                sale_return = SaleReturn.objects.create(
+                    billing=billing,
+                    customer=billing.customer,
+                    return_reason=return_reason,
+                    total_return_qty=Decimal('0.00'),
+                    total_refund_amount=Decimal('0.00')
+                )
 
-            for item in billing_items:
-                ret_qty_str = request.POST.get(f"return_qty_{item.id}", "0")
-                try:
-                    ret_qty = Decimal(ret_qty_str)
-                except:
-                    ret_qty = Decimal('0.00')
+                total_qty = Decimal('0.00')
+                total_amount = Decimal('0.00')
 
-                if ret_qty > 0:
-                    ret_amount = ret_qty * Decimal(str(item.selling_price))
-
-                    SaleReturnItem.objects.create(
-                        sale_return=sale_return,
-                        billing_item=item,
-                        code=item.code,
-                        item_name=item.item_name,
-                        unit=item.unit,
-                        qty=item.qty,
-                        mrp=item.mrp,
-                        price=item.selling_price,
-                        return_qty=ret_qty,
-                        return_amount=ret_amount,
-                    )
-                 
+                for item in billing_items:
+                    ret_qty_str = request.POST.get(f"return_qty_{item.id}", "0")
                     try:
-                        # First: Try exact match (MRP + in_stock)
-                        print(f"Debug: Searching Inventory with code={item.code}, mrp={item.mrp}, status='in_stock'")
-                        inventory_item = Inventory.objects.filter(
+                        ret_qty = Decimal(ret_qty_str)
+                    except:
+                        ret_qty = Decimal('0.00')
+
+                    if ret_qty > 0:
+                        ret_amount = ret_qty * Decimal(str(item.selling_price))
+
+                        SaleReturnItem.objects.create(
+                            sale_return=sale_return,
+                            billing_item=item,
                             code=item.code,
-                            mrp_price=item.mrp,
-                            status__iexact="in_stock"
-                        ).order_by('-id').first()
-                        print("Debug: Inventory found:", inventory_item)
+                            item_name=item.item_name,
+                            unit=item.unit,
+                            qty=item.qty,
+                            mrp=item.mrp,
+                            price=item.selling_price,
+                            return_qty=ret_qty,
+                            return_amount=ret_amount,
+                        )
 
-                        if inventory_item:
-                            # Update in_stock batch
-                            if "bulk" in item.unit.lower():
-                                bag_size = Decimal(str(inventory_item.unit_qty)) if inventory_item.unit_qty else Decimal('1.00')
-                                qty_fraction = ret_qty / bag_size
-                                inventory_item.quantity += float(qty_fraction)                               
-                                inventory_item.split_unit += float(ret_qty)                                                                                          
-                            else:
-                                inventory_item.quantity += float(ret_qty)
-                            inventory_item.save()
-
-                        else:
-                            # Second: Try MRP match + completed
-                            completed_item = Inventory.objects.filter(
+                        # inventory update simplified and defensive
+                        try:
+                            inventory_item = Inventory.objects.filter(
                                 code=item.code,
                                 mrp_price=item.mrp,
-                                status__iexact="completed"
+                                status__iexact="in_stock"
                             ).order_by('-id').first()
 
-                            if completed_item:
-                                if "bulk" in item.unit.lower():
-                                    bag_size = Decimal(str(completed_item.unit_qty)) if completed_item.unit_qty else Decimal('1.00')
+                            if inventory_item:
+                                if item.unit and "bulk" in str(item.unit).lower():
+                                    bag_size = Decimal(str(inventory_item.unit_qty or 1))
                                     qty_fraction = ret_qty / bag_size
-                                    completed_item.quantity += float(qty_fraction)                                   
-                                    completed_item.split_unit += float(ret_qty)                                                                  
+                                    inventory_item.quantity += float(qty_fraction)
+                                    inventory_item.split_unit = (inventory_item.split_unit or 0) + float(ret_qty)
                                 else:
-                                    completed_item.quantity += float(ret_qty)
-                                completed_item.status = "in_stock"
-                                completed_item.save()
-
+                                    inventory_item.quantity += float(ret_qty)
+                                inventory_item.save()
                             else:
-                                # Third: If no match by status, try any batch with same MRP regardless of status
-                                any_mrp_match = Inventory.objects.filter(
+                                # try completed or any mrp match or create new
+                                completed_item = Inventory.objects.filter(
                                     code=item.code,
-                                    mrp=item.mrp
+                                    mrp_price=item.mrp
                                 ).order_by('-id').first()
-
-                                if any_mrp_match:
-                                    if "bulk" in item.unit.lower():
-                                        bag_size = Decimal(str(inventory_item.unit_qty)) if inventory_item.unit_qty else Decimal('1.00')
+                                if completed_item:
+                                    if item.unit and "bulk" in str(item.unit).lower():
+                                        bag_size = Decimal(str(completed_item.unit_qty or 1))
                                         qty_fraction = ret_qty / bag_size
-                                        any_mrp_match.quantity += float(qty_fraction)
-                                        any_mrp_match.split_unit += float(ret_qty)
+                                        completed_item.quantity += float(qty_fraction)
+                                        completed_item.split_unit = (completed_item.split_unit or 0) + float(ret_qty)
                                     else:
-                                        any_mrp_match.quantity += float(ret_qty)
-                                    any_mrp_match.status = "in_stock"  # Force restock
-                                    any_mrp_match.save()
-
+                                        completed_item.quantity += float(ret_qty)
+                                    completed_item.status = "in_stock"
+                                    completed_item.save()
                                 else:
-                                    # Create new batch
                                     Inventory.objects.create(
                                         code=item.code,
                                         item_name=item.item_name,
                                         unit=item.unit,
                                         mrp_price=item.mrp,
-                                        quantity=float(ret_qty) if item.unit.lower() != "bulk" else (float(ret_qty) / (item.unit_qty or Decimal('1.00'))),
-                                        split_unit=float(ret_qty) if item.unit.lower() == "bulk" else None,
+                                        quantity=float(ret_qty),
+                                        split_unit=float(ret_qty) if item.unit and "bulk" in str(item.unit).lower() else None,
                                         unit_qty=item.unit_qty,
                                         status="in_stock"
                                     )
+                        except Exception as e:
+                            print("Inventory update error:", e)
 
-                    except Exception as e:
-                        print(f"Error while processing inventory return: {e}")
+                        total_qty += ret_qty
+                        total_amount += ret_amount
 
-                    total_qty += ret_qty
-                    total_amount += ret_amount
+                sale_return.total_return_qty = total_qty
+                sale_return.total_refund_amount = total_amount
+                sale_return.save()
 
-            sale_return.total_return_qty = total_qty
-            sale_return.total_refund_amount = total_amount
-            sale_return.save()
+                messages.success(request, "Sale return processed successfully.")
+                # After processing we redirect to clear POST and show list
+                return redirect(reverse('sale_return'))
 
-            return redirect(reverse('sale_return'))
-
-    else:
-        # GET request: populate billing data if query params are present
-        bill_no = request.GET.get("bill_no", "").strip()
-        customer_name = request.GET.get("customer_name", "").strip()
-        customer_phone = request.GET.get("customer_phone", "").strip()
-
-        if bill_no:
-            billings = Billing.objects.filter(bill_no=bill_no)
-            if customer_name or customer_phone:
-                billings = billings.filter(
-                    Q(customer__name__icontains=customer_name) if customer_name else Q(),
-                    Q(customer__cell__icontains=customer_phone) if customer_phone else Q()
-                )
-            if billings.exists():
-                billing = billings.first()
-                billing_items = BillingItem.objects.filter(billing_id=billing.id)
-            else:
-                error = "No billing found matching the given criteria."
-
-    # Fetch all sale returns to show list on same page or elsewhere
-    start_date = request.GET.get('start_date')
-    end_date = request.GET.get('end_date')
-
-    sale_returns = SaleReturn.objects.select_related('billing', 'customer')
-
-    # Apply date filter if both dates are provided
-    if start_date and end_date:
-        start_date = parse_date(start_date)
-        end_date = parse_date(end_date)
-        if start_date and end_date:
-            sale_returns = sale_returns.filter(created_at__date__range=(start_date, end_date))
-
-    sale_returns = sale_returns.order_by('-created_at')
-    # sale_returns = SaleReturn.objects.select_related('billing', 'customer').order_by('-created_at')
-
+    # -------------------------
+    # GET or fall-through render
+    # -------------------------
     context = {
         "billing": billing,
         "billing_items": billing_items,
@@ -2387,9 +2527,11 @@ def sale_return_view(request):
         "bill_no": bill_no,
         "customer_name": customer_name,
         "customer_phone": customer_phone,
-        "sale_returns": sale_returns,
+        "sale_returns": sale_returns_qs,
     }
     return render(request, "sale_return.html", context)
+
+
 
 from django.contrib import messages
 
@@ -2997,15 +3139,19 @@ def create_purchase(request):
 @access_required(allowed_roles=['superuser'])
 def fetch_purchase_items(request):
     invoice_number = request.GET.get('invoice_number')    
-    if not invoice_number:       
+
+    if not invoice_number:
         return JsonResponse({'error': 'Invoice number is required'}, status=400)
+
     try:
-        purchase = Purchase.objects.get(invoice_no=invoice_number)       
-    except Purchase.DoesNotExist:       
-        return JsonResponse({'error': 'Purchase not found'}, status=404)
-    items = PurchaseItem.objects.filter(purchase_id=purchase.id)    
+        purchase = Purchase.objects.get(invoice_no=invoice_number)
+    except Purchase.DoesNotExist:
+        return JsonResponse({'error': 'New Invoice number added'}, status=404)
+
+    items = PurchaseItem.objects.filter(purchase_id=purchase.id)
     items_data = []
-    for item in items:       
+
+    for item in items:
         items_data.append({
             'item_name': item.item_name,
             'item_code': item.code,
@@ -3030,15 +3176,15 @@ def fetch_purchase_items(request):
         })
 
     purchase_data = {
-    'amount_paid': str(purchase.amount_paid or 0),
-    'outstanding_amount': str(purchase.outstanding_amount or 0),
-    'payment_mode': purchase.payment_mode or "",
-    'payment_rate': str(purchase.payment_rate or 0),
-    'payment_reference': purchase.payment_reference or "",
-    }   
+        'amount_paid': str(purchase.amount_paid or 0),
+        'outstanding_amount': str(purchase.outstanding_amount or 0),
+        'payment_mode': purchase.payment_mode or "",
+        'payment_rate': str(purchase.payment_rate or 0),
+        'payment_reference': purchase.payment_reference or "",
+    }
 
     print("Returning", len(items_data), "items for invoice:", invoice_number)
-    return JsonResponse({'items': items_data,  'purchase': purchase_data})
+    return JsonResponse({'items': items_data, 'purchase': purchase_data})
 
 def daily_purchase_payment_view(request):
     if request.method == "POST":       
