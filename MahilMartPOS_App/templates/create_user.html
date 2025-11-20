@@ -4,14 +4,12 @@
 <style>
 :root {
   --primary: #2e3b4e;
-  /* --primary-light: #f0f6ff; */
   --primary-dark: #1f2a38;
   --border: #d4d4d4;
   --text: #222;
   --white: #fff;
 }
 
-/* FORM BOX */
 .form-box {
   max-width: 600px;
   margin: 50px auto;
@@ -21,80 +19,60 @@
   box-shadow: 0 10px 30px rgba(0,0,0,0.08);
   font-family: 'Poppins', sans-serif;
 }
+.form-box label { font-weight: 600; margin-top: 14px; display:block; }
 
-.form-box h2 {
-  color: var(--primary-dark);
-  margin-bottom: 25px;
-  text-align: center;
-  font-weight: 700;
-}
-
-/* LABELS */
-.form-box label {
-  font-weight: 600;
-  margin-top: 14px;
-  display: block;
-  color: var(--text);
-}
-
-/* INPUTS (NORMAL STATE = WHITE) */
 .form-box input,
 .form-box select {
   width: 100%;
   padding: 12px;
   border-radius: 10px;
   border: 1px solid var(--border);
-  background: var(--white);        /* FIXED */
-  font-size: 1rem;
-  transition: 0.2s;
-  color: var(--text);
+  background: #fff;
 }
 
-/* HOVER — Slight color only */
-.form-box input:hover,
-.form-box select:hover {
-  background: #f0f6ff;   /* very light */
-}
-
-/* FOCUS — Slight color + border only */
-.form-box input:focus,
-.form-box select:focus {
-  border-color: var(--primary);
-  background:  #f0f6ff;
-  outline: none;
-}
-
-/* AUTOFILL FIX — keep it white */
-input:-webkit-autofill {
-  background-color: var(--white) !important;
-  -webkit-box-shadow: 0 0 0 1000px var(--white) inset !important;
-}
-
-/* BUTTON */
 .form-box button {
+  margin-top: 15px;
   width: 100%;
   padding: 12px;
   background: var(--primary);
-  border: none;
-  color: white;
-  font-size: 1.1rem;
-  font-weight: 600;
+  color:white;
   border-radius: 10px;
-  cursor: pointer;
-  transition: 0.2s;
+  border:none;
+  cursor:pointer;
 }
 
-.form-box button:hover {
-  background: var(--primary-dark);
+.group-btn {
+  margin-top: 10px;
+  width: 100%;
+  background: #556;
 }
+.group-btn:hover { background:#334; }
+
+/* Modal */
+#groupModal {
+  position: fixed; top:0; left:0; width:100%; height:100%;
+  background: rgba(0,0,0,0.4);
+  display:none; justify-content:center; align-items:center;
+  z-index:2000;
+}
+#groupModalContent {
+  background:white;
+  width:450px;
+  padding:20px;
+  border-radius:12px;
+}
+.group-toggle { padding:7px 0; border-bottom:1px solid #eee; }
 </style>
+
 
 
 
 <div class="form-box">
   <h2>Create New User</h2>
-  <form method="POST">
+
+  <form method="POST" onsubmit="return validateForm()">
     {% csrf_token %}
+
     <label>Username</label>
     <input type="text" name="username" required>
 
@@ -104,14 +82,121 @@ input:-webkit-autofill {
     <label>Password</label>
     <input type="password" name="password" required>
 
-    <label>Role</label>
-    <select name="role">
-      <option value="">Normal User</option>
-      <option value="staff">Staff</option>
+    <!-- ROLE SELECTION -->
+    <label>Role <span style="color:red">*</span></label>
+    <select name="role" id="roleSelect" required>
+      <option value="">-- Select Role --</option>
       <option value="admin">Admin</option>
+      <option value="staff">Supervisor</option>
+      <option value="normal">Cashier</option>
     </select>
 
-    <button type="submit">➕ Create User</button>
+    <!-- GROUP SELECTION -->
+    <label>Group <span style="color:red">*</span></label>
+    <select name="group" id="groupSelect" required>
+      <option value="">-- Select Group --</option>
+      {% for g in groups %}
+        <option value="{{ g.id }}">{{ g.name }}</option>
+      {% endfor %}
+    </select>
+
+    <button type="button" class="group-btn" onclick="openGroupModal()">➕ Create Group</button>
+
+    <button type="submit">Create User</button>
   </form>
 </div>
+
+
+
+
+
+<!-- GROUP MODAL -->
+<div id="groupModal">
+  <div id="groupModalContent">
+    <h4>Create Group</h4>
+
+    <input type="text" id="newGroupName" class="form-control" placeholder="Enter group name...">
+
+    <button class="group-btn" onclick="saveGroup()">Save Group</button>
+
+    <hr>
+    <h5>Existing Groups</h5>
+    <div id="groupListContainer"></div>
+
+    <button class="group-btn" style="background:#333;" onclick="closeGroupModal()">Close</button>
+  </div>
+</div>
+
+
+
+
+
+<script>
+/* VALIDATION BEFORE SUBMIT */
+function validateForm() {
+    let role = document.getElementById("roleSelect").value;
+    let group = document.getElementById("groupSelect").value;
+
+    if (!role) {
+        alert("Please select a Role");
+        return false;
+    }
+    if (!group) {
+        alert("Please select a Group");
+        return false;
+    }
+    return true;
+}
+
+/* MODAL OPEN/CLOSE */
+function openGroupModal() {
+    document.getElementById("groupModal").style.display = "flex";
+    loadGroups();
+}
+function closeGroupModal() {
+    document.getElementById("groupModal").style.display = "none";
+}
+
+/* LOAD GROUP LIST */
+function loadGroups() {
+    fetch("/ajax/get-groups/")
+    .then(res => res.json())
+    .then(data => {
+        document.getElementById("groupListContainer").innerHTML = data.html;
+    });
+}
+
+/* CREATE NEW GROUP */
+function saveGroup() {
+    const name = document.getElementById("newGroupName").value.trim();
+    if (!name) { alert("Enter group name"); return; }
+
+    fetch("/ajax/create-group/", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "X-CSRFToken": "{{ csrf_token }}"
+        },
+        body: JSON.stringify({ group_name: name })
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+
+            // Add to dropdown instantly
+            const sel = document.getElementById("groupSelect");
+            const opt = document.createElement("option");
+            opt.value = data.id;
+            opt.textContent = data.name;
+            sel.appendChild(opt);
+
+            loadGroups();
+            document.getElementById("newGroupName").value = "";
+        } else {
+            alert(data.message);
+        }
+    });
+}
+</script>
+
 {% endblock %}

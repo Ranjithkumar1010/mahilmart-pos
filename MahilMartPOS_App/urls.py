@@ -6,18 +6,33 @@ from django.conf.urls import handler403
 urlpatterns = [
     # login page
     path('', views.login_view, name='home'),
+    path("access-denied/", views.access_denied, name="access_denied"),
+
+
+
+    path("settings/", views.settings_page, name="settings_page"),
+
 
 
     #create user
     path('users/create/', views.create_user, name='create_user'),
-    path("settings/admin/", views.update_admin_settings, name="settings_page"),
+    path("settings/admin/", views.update_admin_settings, name="user"),
     path("settings/users/<int:user_id>/edit/", views.edit_user, name="edit_user"),
     path("settings/users/<int:user_id>/delete/", views.delete_user, name="delete_user"),
     path("ajax/search-users/", views.ajax_search_users, name="ajax_search_users"),
 
 
+    path("pos-theme/", views.pos_theme_view, name="pos_theme"),
+    path("permission-settings/", views.permission_settings_view, name="permission_settings"),
+
+
+
+
+
     # dashboard page
     path('dashboard/', views.dashboard_view, name='dashboard'),
+    path('computer-alias/', views.computer_alias_view, name='computer_alias'),
+
     path('generate-report/', views.generate_report, name='generate_report'),
     path('billing/<int:id>/', views.billing_detail_view, name='billing_detail'),
     path('billing/<int:bill_id>/items/', views.billing_items_api, name='billing_items_api'),
@@ -131,6 +146,12 @@ urlpatterns = [
 
     # logout page
     path('logout/', auth_views.LogoutView.as_view(next_page='home'), name='logout'),
+
+    #migration 
+    path("db-migrate/", views.db_migration_tool, name="db_migration_tool"),
+    path("db-migrate/run/", views.migrate_single_table, name="migrate_single_table"),
+    path("db-migrate/all/", views.migrate_all_tables, name="migrate_all_tables"),
+
 ]
 
 handler403 = 'MahilMartPOS_App.views.custom_permission_denied_view'

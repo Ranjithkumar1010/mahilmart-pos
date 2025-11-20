@@ -40,6 +40,15 @@ from django.db.models import Sum, F, Case, When
 from django.db.models import DecimalField, F, Sum
 from django.db.models import F, ExpressionWrapper, DecimalField, CharField, Value, Case, When
 from django.shortcuts import render
+from django.shortcuts import render, redirect
+from .models import ComputerAlias, AdminSettings, CashierRestriction
+from .models import LoginLog
+from django.contrib.auth.models import User
+import json
+from django.http import JsonResponse
+from django.contrib.auth.models import User
+from django.shortcuts import render
+from .models import CashierPermission, SupervisorPermission
 from django.http import JsonResponse
 from django.utils import timezone
 from datetime import timedelta
@@ -54,6 +63,14 @@ from django.contrib.auth.models import User, Group
 from django.contrib.sessions.models import Session
 from django.http import HttpResponse
 import io
+from functools import wraps
+from django.shortcuts import redirect
+from .models import CashierPermission, SupervisorPermission
+from django.shortcuts import render
+from django.utils import timezone
+from django.core.mail import EmailMultiAlternatives
+from django.conf import settings
+from .utils import get_computer_name_from_ip
 from django.http import JsonResponse
 from django.template.loader import render_to_string
 from barcode import Code128
@@ -89,52 +106,442 @@ from .models import (
     PurchaseTracking,
     DailyPurchasePayment,
     PointsConfig,
+    LoginLog,
+    ComputerAlias,
 )
+
+
+# -------------------------
+# Unified Permission Checker
+# -------------------------
+def _check_permission(user, perm_field):
+    if user.is_superuser:
+        return True
+
+    # Load or create permission row for this user
+    if user.is_staff:
+        perm, _ = SupervisorPermission.objects.get_or_create(user=user)
+    else:
+        perm, _ = CashierPermission.objects.get_or_create(user=user)
+
+    # Return True/False based on field
+    return getattr(perm, perm_field, False)
+
+
+# -------------------------
+# Decorator Builder
+# -------------------------
+def build_permission_decorator(permission_name):
+    perm_field = f"allow_{permission_name}"
+
+    def decorator(view_func):
+        @wraps(view_func)
+        def wrapper(request, *args, **kwargs):
+            if _check_permission(request.user, perm_field):
+                return view_func(request, *args, **kwargs)
+            return redirect("access_denied")
+        return wrapper
+
+    return decorator
+
+
+# -------------------------
+# AUTO-CREATED DECORATORS
+# -------------------------
+allow_dashboard     = build_permission_decorator("dashboard")
+allow_billing       = build_permission_decorator("billing")
+allow_sales_return  = build_permission_decorator("sales_return")
+allow_products      = build_permission_decorator("products")
+allow_items         = build_permission_decorator("items")
+allow_purchase      = build_permission_decorator("purchase")
+allow_inventory     = build_permission_decorator("inventory")
+allow_suppliers     = build_permission_decorator("suppliers")
+allow_config_view   = build_permission_decorator("config_view")
+allow_barcodes      = build_permission_decorator("barcodes")
+allow_customers     = build_permission_decorator("customers")
+allow_payments      = build_permission_decorator("payments")
+allow_expenses      = build_permission_decorator("expenses")
+allow_reports       = build_permission_decorator("reports")
+allow_logs          = build_permission_decorator("logs")
+allow_company       = build_permission_decorator("company")
+allow_settings      = build_permission_decorator("settings")
+
+
+def access_denied(request):
+    user = request.user if request.user.is_authenticated else None
+
+    username = user.username if user else "Anonymous"
+    full_name = user.get_full_name() if user else ""
+    path = request.path
+    method = request.method
+    ip = request.META.get("REMOTE_ADDR", "Unknown IP")
+    now = timezone.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    subject = f"🚫 Access Denied Alert – MahilMart POS"
+
+    # --------- PREMIUM HTML EMAIL TEMPLATE ----------
+    html_message = f"""
+    <div style="font-family: Arial, sans-serif; background:#f5f7fb; padding:20px;">
+        <div style="max-width:600px; margin:auto; background:white; border-radius:12px;
+                    box-shadow:0 4px 20px rgba(0,0,0,0.1); padding:25px;">
+
+            <h2 style="color:#d9534f; text-align:center;">🚫 Access Denied Alert</h2>
+            <p style="text-align:center; font-size:15px; color:#666;">
+                A restricted page was accessed in <strong>MahilMart POS</strong>
+            </p>
+
+            <hr style="margin:20px 0;">
+
+            <table style="width:100%; font-size:14px; color:#333;">
+                <tr>
+                    <td><strong>User:</strong></td>
+                    <td>{username} {f'({full_name})' if full_name else ''}</td>
+                </tr>
+                <tr>
+                    <td><strong>Authenticated:</strong></td>
+                    <td>{request.user.is_authenticated}</td>
+                </tr>
+                <tr>
+                    <td><strong>IP Address:</strong></td>
+                    <td>{ip}</td>
+                </tr>
+                <tr>
+                    <td><strong>Attempted Page:</strong></td>
+                    <td>{path}</td>
+                </tr>
+                <tr>
+                    <td><strong>Request Method:</strong></td>
+                    <td>{method}</td>
+                </tr>
+                <tr>
+                    <td><strong>Date & Time:</strong></td>
+                    <td>{now}</td>
+                </tr>
+            </table>
+
+            <hr style="margin:20px 0;">
+
+            <div style="padding:10px; background:#f0f4ff; border-radius:8px;">
+                <strong>GET Data:</strong>
+                <pre style="font-size:13px; color:#555;">{dict(request.GET)}</pre>
+            </div>
+
+            <br>
+
+            <div style="padding:10px; background:#f9f1f0; border-radius:8px;">
+                <strong>POST Data:</strong>
+                <pre style="font-size:13px; color:#555;">{dict(request.POST)}</pre>
+            </div>
+
+            <br>
+
+            <p style="font-size:13px; text-align:center; color:#777;">
+                This alert is generated automatically by <strong>MahilMart POS</strong>.
+            </p>
+        </div>
+    </div>
+    """
+
+    # --------- SEND HTML EMAIL TO ADMINS ----------
+    try:
+        email = EmailMultiAlternatives(
+            subject,
+            "",  # plain text fallback if needed
+            settings.DEFAULT_FROM_EMAIL,
+            [admin_email for _, admin_email in settings.ADMINS],
+        )
+        email.attach_alternative(html_message, "text/html")
+        email.send(fail_silently=True)
+
+    except Exception as e:
+        print("Email sending failed:", e)
+
+    return render(request, "access_denied.html", status=403)
+
+
+
+
+
 
 def home(request):
     return render(request, 'home.html')
 
-def login_view(request):
-    if request.method == 'POST':
-        username = request.POST['username']
-        password = request.POST['password']
-        user = authenticate(request, username=username, password=password)
+# # utils.py
 
-        if user is not None:
-            login(request, user)
-            return redirect('dashboard')  # Redirect to dashboard
-        else:
-            return render(request, 'home.html', {'error': 'Invalid credentials'})
+# def get_client_ip(request):
+#     x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+#     if x_forwarded_for:
+#         return x_forwarded_for.split(",")[0]
+#     return request.META.get("REMOTE_ADDR", "")
     
-    return render(request, 'home.html')
 
+# def get_machine_id(request):
+#     """Reads machine-id sent from browser (UUID saved in localStorage)"""
+#     return request.POST.get("machine_id") or "Unknown-Device"
+
+from django.shortcuts import render, redirect
+from django.contrib.auth import authenticate, login
+from django.contrib.sessions.models import Session
+from MahilMartPOS_App.models import LoginLog, ComputerAlias
+from .utils import get_client_ip, get_machine_name_from_ip
+
+
+def logout_previous_sessions(user):
+    from django.contrib.sessions.models import Session
+
+    for session in Session.objects.all():
+        data = session.get_decoded()
+
+        if data.get('_auth_user_id') == str(user.id):
+
+            # Mark the session for forced logout
+            data['force_logout'] = True
+            session.delete()
+
+from django.shortcuts import render, redirect
+from django.contrib.auth import authenticate, login
+from django.contrib import messages
+from django.contrib.sessions.models import Session
+from django.utils import timezone
+
+from MahilMartPOS_App.models import LoginLog, ComputerAlias
+from .utils import get_client_ip, get_machine_name_from_ip
+
+
+def login_view(request):
+    # ------------------------------------------
+    # SHOW LOGIN PAGE (GET)
+    # ------------------------------------------
+    if request.method == 'GET':
+        return render(request, "home.html")
+
+    # ------------------------------------------
+    # HANDLE FORM SUBMISSION (POST)
+    # ------------------------------------------
+    username = request.POST.get("username")
+    password = request.POST.get("password")
+
+    user = authenticate(request, username=username, password=password)
+
+    if not user:
+        return render(request, "home.html", {
+            "error": "Invalid credentials",
+            "username": username
+        })
+
+    # ------------------------------------------
+    # SUCCESS: LOGIN USER
+    # ------------------------------------------
+    login(request, user)
+
+    # Ensure session key exists
+    if not request.session.session_key:
+        request.session.save()
+
+    current_session_key = request.session.session_key
+
+    # ------------------------------------------
+    # DEVICE IDENTIFICATION
+    # ------------------------------------------
+    user_ip = get_client_ip(request)
+    hostname = get_machine_name_from_ip(user_ip)
+    fallback_id = request.POST.get("browser_machine_id")
+
+    # Use real hostname if found; else browser ID
+    machine_id = hostname if hostname != "Unknown-PC" else (fallback_id or "Unknown-Device")
+
+    ComputerAlias.objects.get_or_create(
+        computer_name=machine_id,
+        defaults={"alias_name": machine_id}
+    )
+
+    # Save login history
+    LoginLog.objects.create(
+        user=user,
+        ip_address=user_ip,
+        computer_name=machine_id
+    )
+
+    # ------------------------------------------
+    # SINGLE LOGIN ENFORCEMENT
+    # Delete all old sessions except current
+    # ------------------------------------------
+    sessions = Session.objects.filter(expire_date__gte=timezone.now())
+    for s in sessions:
+        data = s.get_decoded()
+        if str(data.get("_auth_user_id")) == str(user.id) and s.session_key != current_session_key:
+            s.delete()
+
+    # ------------------------------------------
+    # REDIRECT TO DASHBOARD
+    # ------------------------------------------
+    return redirect("dashboard")
+
+
+
+
+
+
+
+
+
+
+@allow_settings
 @login_required
 def create_user(request):
-    if (request.method == 'POST'):
+    from django.contrib.auth.models import Group
+
+    if request.method == 'POST':
         username = request.POST['username']
         email = request.POST.get('email')
         password = request.POST['password']
         role = request.POST.get('role')
+        group_id = request.POST.get('group')     # <-- NEW
+
+        # -------- VALIDATIONS ----------
         if User.objects.filter(username=username).exists():
             messages.error(request, 'Username already exists.')
             return redirect('create_user')
-        user = User.objects.create_user(username=username, email=email, password=password)
-        if (role == 'staff'):
+
+        if not group_id:
+            messages.error(request, "Please select a group.")
+            return redirect('create_user')
+
+        # -------- CREATE USER ----------
+        user = User.objects.create_user(
+            username=username,
+            email=email,
+            password=password
+        )
+
+        # -------- ROLE ASSIGNMENT ----------
+        if role == 'staff':
             user.is_staff = True
-        elif (role == 'admin'):
+
+        elif role == 'admin':
             user.is_staff = True
             user.is_superuser = True
+
         user.save()
-        messages.success(request, 'User created successfully.')
-        return redirect('settings_page')
-    return render(request, 'create_user.html')
+
+        # -------- GROUP ASSIGNMENT ----------
+        try:
+            group = Group.objects.get(id=group_id)
+            user.groups.clear()            # remove old/default
+            user.groups.add(group)         # assign new one
+        except Group.DoesNotExist:
+            messages.error(request, "Selected group does not exist.")
+            return redirect('create_user')
+
+        messages.success(request, "User created successfully.")
+        return redirect('user')
+
+    # ----- LOAD GROUPS FOR DROPDOWN -----
+    groups = Group.objects.all()
+
+    return render(request, 'create_user.html', {
+        'groups': groups
+    })
 
 
+
+
+def ajax_get_groups(request):
+    groups = Group.objects.all().order_by("name")
+    html = render_to_string("partials/group_list.html", {"groups": groups})
+    return JsonResponse({"html": html})
+
+
+def ajax_create_group(request):
+    data = json.loads(request.body)
+    name = data.get("group_name").strip()
+
+    if Group.objects.filter(name=name).exists():
+        return JsonResponse({"success": False, "message": "Group already exists!"})
+
+    Group.objects.create(name=name)
+    return JsonResponse({"success": True})
+
+
+def ajax_toggle_group(request):
+    data = json.loads(request.body)
+    group_id = data.get("id")
+
+    # you can implement any ON/OFF logic here
+    return JsonResponse({"success": True})
+
+
+
+@allow_settings
+def settings_page(request):
+
+    # Load admin settings (only 1 row)
+    settings_obj, created = AdminSettings.objects.get_or_create(id=1)
+
+    # ---------------------
+    # SAVE ADMIN SETTINGS
+    # ---------------------
+    if request.method == "POST" and "save_admin" in request.POST:
+        settings_obj.company_name = request.POST.get("company_name")
+        settings_obj.phone = request.POST.get("phone")
+        settings_obj.address = request.POST.get("address")
+        settings_obj.invoice_footer = request.POST.get("invoice_footer")
+        settings_obj.theme_color = request.POST.get("theme_color")
+        settings_obj.save()
+        return redirect("settings_page")
+
+    # ---------------------
+    # COMPUTER ALIAS SAVE
+    # ---------------------
+    if request.method == "POST" and "save_alias" in request.POST:
+        comp_name = request.POST.get("computer_name")
+        alias_name = request.POST.get("alias_name")
+        ComputerAlias.objects.update_or_create(
+            computer_name=comp_name,
+            defaults={"alias_name": alias_name}
+        )
+        return redirect("settings_page")
+
+    # ---------------------
+    # CASHIER RESTRICTIONS SAVE
+    # ---------------------
+    if request.method == "POST" and "save_restriction" in request.POST:
+        user_id = request.POST.get("user_id")
+        user = User.objects.get(id=user_id)
+
+        r, c = CashierRestriction.objects.get_or_create(user=user)
+        r.allow_discount = "discount" in request.POST
+        r.allow_price_edit = "price_edit" in request.POST
+        r.allow_delete_bill = "delete_bill" in request.POST
+        r.save()
+        return redirect("settings_page")
+
+    # List all computers seen in login logs
+    all_computers = LoginLog.objects.values_list("computer_name", flat=True).distinct()
+    pc_list = []
+    for comp in all_computers:
+        alias = ComputerAlias.objects.filter(computer_name=comp).first()
+        pc_list.append({
+            "computer_name": comp,
+            "alias_name": alias.alias_name if alias else "",
+        })
+
+    # List all cashiers
+    cashiers = User.objects.filter(groups__name="Cashier")
+
+    restrictions = {r.user_id: r for r in CashierRestriction.objects.all()}
+
+    return render(request, "settings_page.html", {
+        "settings_obj": settings_obj,
+        "computers": pc_list,
+        "cashiers": cashiers,
+        "restrictions": restrictions,
+    })
 
 # ======================
 # USER LIST (user_settings.html)
 # ======================
-@user_passes_test((lambda u: u.is_superuser))
+@allow_settings
 def update_admin_settings(request):
     query = request.GET.get('q')
     sort_by = request.GET.get('sort', 'id')
@@ -167,35 +574,62 @@ def update_admin_settings(request):
 # ======================
 # EDIT USER
 # ======================
-@user_passes_test(lambda u: u.is_superuser)
+@allow_settings
 def edit_user(request, user_id):
+    from django.contrib.auth.models import Group
+
     user = get_object_or_404(User, id=user_id)
 
     if request.method == "POST":
+        # Basic fields
         user.username = request.POST.get("username")
         user.email = request.POST.get("email")
 
+        # Staff & Admin roles
         user.is_staff = True if request.POST.get("is_staff") == "on" else False
         user.is_superuser = True if request.POST.get("is_superuser") == "on" else False
 
+        # Password update (optional)
         password = request.POST.get("password")
         if password:
             user.set_password(password)
 
-        user.save()
-        return redirect("settings_page")
+        # -------------------------
+        # SAVE GROUP SELECTION
+        # -------------------------
+        group_id = request.POST.get("group")
+        if group_id:
+            try:
+                group = Group.objects.get(id=group_id)
+                user.groups.clear()          # remove old groups
+                user.groups.add(group)       # assign new group
+            except Group.DoesNotExist:
+                pass
 
-    return render(request, "edit_user.html", {"user": user})
+        user.save()
+        return redirect("user")
+
+    # -------------------------
+    # GET request data
+    # -------------------------
+    groups = Group.objects.all()
+    current_group = user.groups.first()
+
+    return render(request, "edit_user.html", {
+        "user": user,
+        "groups": groups,
+        "current_group_id": current_group.id if current_group else None
+    })
 
 
 # ======================
 # DELETE USER
 # ======================
-@user_passes_test(lambda u: u.is_superuser)
+@allow_settings
 def delete_user(request, user_id):
     user = get_object_or_404(User, id=user_id)
     user.delete()
-    return redirect("settings_page")
+    return redirect("user")
 
 @user_passes_test(lambda u: u.is_superuser)
 def ajax_search_users(request):
@@ -215,7 +649,112 @@ def ajax_search_users(request):
     )
 
     return JsonResponse({"html": html})
+@allow_settings
+def pos_theme_view(request):
+    # Ensure settings object always exists
+    settings = AdminSettings.objects.first()
+    if settings is None:
+        settings = AdminSettings.objects.create(
+            primary_color="#2e3b4e",
+            sidebar_color="#1f2a38",
+            accent_color="#4a6fa5",
+            mode="light"
+        )
 
+    if request.method == "POST":
+        if "save_theme" in request.POST:
+
+            # Save theme colors
+            settings.primary_color = request.POST.get("primary_color")
+            settings.sidebar_color = request.POST.get("sidebar_color")
+            settings.accent_color = request.POST.get("accent_color")
+
+            # Save theme mode (light / dark)
+            settings.mode = request.POST.get("theme_mode") or "light"
+
+            # Save logo
+            if "logo" in request.FILES:
+                settings.logo = request.FILES["logo"]
+
+            settings.save()
+
+            messages.success(request, "Theme updated successfully!")
+            return redirect("pos_theme")
+
+    return render(request, "pos_theme.html", {"settings": settings})
+
+
+@allow_settings
+def permission_settings_view(request):
+
+    # -----------------------
+    # AJAX auto-save handler
+    # -----------------------
+    if request.method == "POST" and request.headers.get("Content-Type") == "application/json":
+        data = json.loads(request.body.decode("utf-8"))
+
+        user_id = data.get("user")
+        field = data.get("field")
+        value = data.get("value") == "on"
+
+        user = User.objects.get(id=user_id)
+
+        # determine correct permission model
+        if user.is_staff:
+            perm, _ = SupervisorPermission.objects.get_or_create(user=user)
+        else:
+            perm, _ = CashierPermission.objects.get_or_create(user=user)
+
+        setattr(perm, field, value)
+        perm.save()
+
+        return JsonResponse({"status": "ok"})
+
+    # -----------------------
+    # Normal GET page render
+    # -----------------------
+    user_id = request.GET.get("user")
+    selected_user = User.objects.filter(id=user_id).first() if user_id else User.objects.filter(is_superuser=False).first()
+
+    if not selected_user:
+        return render(request, "permission_settings.html", {"users": [], "selected_user": None})
+
+    if selected_user.is_staff:
+        perm, _ = SupervisorPermission.objects.get_or_create(user=selected_user)
+    else:
+        perm, _ = CashierPermission.objects.get_or_create(user=selected_user)
+
+    items = {
+        "Dashboard": "allow_dashboard",
+        "Billing": "allow_billing",
+        "Sales Return": "allow_sales_return",
+        "Products": "allow_products",
+        "Items": "allow_items",
+        "Purchase": "allow_purchase",
+        "Inventory": "allow_inventory",
+        "Suppliers": "allow_suppliers",
+        "Config View": "allow_config_view",
+        "Barcode Print": "allow_barcodes",
+        "Reports": "allow_reports",
+        "Activity Logs": "allow_logs",
+        "Company Info": "allow_company",
+        "Customers": "allow_customers",
+        "Payments": "allow_payments",
+        "Expenses": "allow_expenses",
+        "Settings": "allow_settings",
+    }
+
+    users = User.objects.filter(is_superuser=False)
+
+    return render(request, "permission_settings.html", {
+        "users": users,
+        "selected_user": selected_user,
+        "items": items,
+        "perm": perm,
+    })
+
+
+    
 
 
 def custom_permission_denied_view(request, exception=None):
@@ -225,7 +764,7 @@ def custom_permission_denied_view(request, exception=None):
     messages.error(request, "🚫 You do not have permission to access this page.")
     return redirect('dashboard')  # make sure 'dashboard' exists in urls.py
 
-@access_required(allowed_roles=['superuser'])
+@allow_company
 def company_settings_view(request):
     if request.method == 'POST':
         form = CompanySettingsForm(request.POST)
@@ -247,65 +786,133 @@ def company_settings_view(request):
 
     return render(request, 'company_details.html', {'form': form})
 
-@access_required(allowed_roles=['superuser'])
+@allow_company
 def view_company_details(request):
     company = CompanyDetails.objects.last()
     return render(request, 'view_company_details.html', {'company': company})
 
+from functools import wraps
+from django.shortcuts import redirect
+from django.contrib import messages
+
+def allow_dashboard(view_func):
+    @wraps(view_func)
+    def wrapper(request, *args, **kwargs):
+
+        # If user logged out because of multi-device login
+        if not request.user.is_authenticated:
+            messages.error(request, "You were logged out because your account was used on another device.")
+            return redirect("home")   # message will show
+
+        return view_func(request, *args, **kwargs)
+
+    return wrapper
+
+
+    
+@allow_dashboard
+@login_required(login_url='home')
 def dashboard_view(request):
-    today = now().date()  
+
+    # ======================================================
+    # 🔐 1. ABSOLUTE SAFETY CHECK (handles auto-logout)
+    # ======================================================
+    user = request.user  # forces evaluation of SimpleLazyObject
+
+    # If logged-out by your single-login system → stop immediately
+    if not user.is_authenticated or '_auth_user_id' not in request.session:
+        messages.error(
+            request,
+            "Your session ended because you logged in from another device."
+        )
+        return redirect('home')
+
+    # ======================================================
+    # 🔐 2. LOAD SIDEBAR PERMISSIONS SAFELY
+    # ======================================================
+    from .models import SupervisorPermission, CashierPermission
+
+    if user.is_superuser:
+        perm = None
+    elif user.is_staff:
+        perm = SupervisorPermission.objects.filter(user_id=user.id).first()
+    else:
+        perm = CashierPermission.objects.filter(user_id=user.id).first()
+
+    # ======================================================
+    # DATE SETUP
+    # ======================================================
+    today = now().date()
     yesterday = today - timedelta(days=1)
 
-    # Base queryset depending on user
-    if request.user.is_superuser:
-        bills_qs = Billing.objects.all()
-    else:
-        bills_qs = Billing.objects.filter(created_by=request.user)
+    # Billing query based on user role
+    bills_qs = Billing.objects.all() if user.is_superuser else Billing.objects.filter(created_by=user)
 
-    # Transaction count (today only)
+    # ======================================================
+    # TRANSACTION COUNT
+    # ======================================================
     transaction_count = bills_qs.filter(created_at__date=today).count()
 
+    # ======================================================
+    # TODAY / YESTERDAY SALES
+    # ======================================================
     today_sales = bills_qs.filter(date__date=today).aggregate(
-    sum_total=Sum('items__amount')
+        sum_total=Sum('items__amount')
     )['sum_total'] or 0
 
     yesterday_sales = bills_qs.filter(date__date=yesterday).aggregate(
         sum_total=Sum('items__amount')
     )['sum_total'] or 0
 
-    # Change percentage
-    if yesterday_sales > 0:
-        change_percentage = ((today_sales - yesterday_sales) / yesterday_sales) * 100
-    else:
-        change_percentage = 0
+    change_percentage = (
+        (today_sales - yesterday_sales) / yesterday_sales * 100
+        if yesterday_sales > 0 else 0
+    )
 
-    # Stock aggregates (not user specific)
+    # ======================================================
+    # STOCK CALCULATION
+    # ======================================================
     stock_qty_expr = Case(
         When(unit__icontains='bulk', then=F('split_unit')),
         default=F('quantity'),
-        output_field=DecimalField(max_digits=20, decimal_places=10)
+        output_field=DecimalField(max_digits=20, decimal_places=10),
     )
-    stock_aggregates = Inventory.objects.values('code', 'item_name', 'unit').annotate(total_qty=Sum(stock_qty_expr))
+
+    stock_aggregates = (
+        Inventory.objects.values('code', 'item_name', 'unit')
+        .annotate(total_qty=Sum(stock_qty_expr))
+    )
+
     no_stock_items = stock_aggregates.filter(total_qty__lte=0)
     no_stock_count = no_stock_items.count()
+
     low_stock_items = stock_aggregates.filter(total_qty__gt=0, total_qty__lt=10)
     low_stock_count = low_stock_items.count()
 
-    # Date filter parameters
+    # ======================================================
+    # DATE RANGE FILTER FOR BILLS
+    # ======================================================
     start_date = request.GET.get('start_date')
     end_date = request.GET.get('end_date')
 
     bills_filtered = bills_qs.select_related('customer')
+
     if start_date and end_date:
         start = parse_date(start_date)
         end = parse_date(end_date)
+
         if start and end:
             if start == end:
                 bills_filtered = bills_filtered.filter(created_at__date=start)
             else:
-                bills_filtered = bills_filtered.filter(created_at__date__gte=start, created_at__date__lte=end)
+                bills_filtered = bills_filtered.filter(
+                    created_at__date__gte=start,
+                    created_at__date__lte=end
+                )
 
-    # Helper to calculate total_received including BillingPayment
+    # ======================================================
+    # HELPER — TOTAL RECEIVED
+    # ======================================================
     def calculate_total_received(bill):
         payments_total = BillingPayment.objects.filter(billing=bill).aggregate(
             total=Sum('new_payment')
@@ -314,40 +921,43 @@ def dashboard_view(request):
         discount_amount = bill.discount_amt or Decimal('0')
         return (bill.received or Decimal('0')) + payments_total + discount_amount
 
-    # Recent bills    
-    recent_bills_qs = bills_qs.select_related('customer').order_by('-created_at')
+    # ======================================================
+    # RECENT BILLS LIST
+    # ======================================================
     recent_bills = []
-    for bill in recent_bills_qs:
+    for bill in bills_qs.select_related('customer').order_by('-created_at'):
         total_received = calculate_total_received(bill)
-        pending_amount = bill.total_amount - total_received
+        pending = bill.total_amount - total_received
 
         recent_bills.append({
             'id': bill.id,
             'bill_no': bill.bill_no,
-            'received_amount': total_received, 
+            'received_amount': total_received,
             'date': bill.date,
             'customer_name': bill.customer.name if bill.customer else 'Walk-in',
             'customer_phone': bill.customer.cell if bill.customer else 'N/A',
             'sale_amount': bill.total_amount,
-            'pending_amount': pending_amount,
+            'pending_amount': pending,
             'created_by': bill.created_by,
-            'status': 'Pending' if pending_amount > 0 else 'Completed',
+            'status': 'Pending' if pending > 0 else 'Completed',
         })
 
+    # ======================================================
+    # SALES TREND (LAST 30 DAYS)
+    # ======================================================
     last_30_days = datetime.now() - timedelta(days=30)
 
-    # Sales Trend
-    sales_trend_qs = (
-        BillingItem.objects
-        .filter(created_at__gte=last_30_days)
+    sales_trend = list(
+        BillingItem.objects.filter(created_at__gte=last_30_days)
         .extra({'date': 'date(created_at)'})
         .values('date')
         .annotate(total_sales=Sum('amount'))
         .order_by('date')
     )
-    sales_trend = list(sales_trend_qs)
-    
-    # Top Selling Products          
+
+    # ======================================================
+    # TOP SELLING PRODUCTS (30 DAYS DEFAULT)
+    # ======================================================
     start_date_str = request.GET.get('top_start_date')
     end_date_str = request.GET.get('top_end_date')
 
@@ -355,256 +965,275 @@ def dashboard_view(request):
         top_start_date = parse_date(start_date_str)
         top_end_date = parse_date(end_date_str)
     else:
-        top_end_date = datetime.today().date()
-        top_start_date = top_end_date - timedelta(days=30)
+        top_end_date = today
+        top_start_date = today - timedelta(days=30)
 
-    context = {}         
-    # format for template (input type="date" expects YYYY-MM-DD)
-    context['top_start_date'] = top_start_date.strftime("%Y-%m-%d")
-    context['top_end_date'] = top_end_date.strftime("%Y-%m-%d")
-
-    # also keep using them for queryset filter etc
-    top_start_date_str = top_start_date.strftime("%Y-%m-%d") if top_start_date else ""
-    top_end_date_str = top_end_date.strftime("%Y-%m-%d") if top_end_date else ""        
-
-    # Query top selling products in the range
-    top_selling_qs = (
-        BillingItem.objects
-        .filter(created_at__date__gte=top_start_date, created_at__date__lte=top_end_date)
-        .values('item_name')
+    top_selling = list(
+        BillingItem.objects.filter(
+            created_at__date__gte=top_start_date,
+            created_at__date__lte=top_end_date
+        ).values('item_name')
         .annotate(total_quantity=Sum('qty'))
         .order_by('-total_quantity')[:25]
     )
-    top_selling = list(top_selling_qs)
 
-    # Sales by Category
-    today = datetime.today().date()
+    # ======================================================
+    # SALES BY CATEGORY
+    # ======================================================
     default_start = today - timedelta(days=30)
     default_end = today
 
-    # Get category-specific date range from GET parameters
     cat_start = request.GET.get('category_start_date')
     cat_end = request.GET.get('category_end_date')
+
     category_start_date = parse_date(cat_start) if cat_start else default_start
     category_end_date = parse_date(cat_end) if cat_end else default_end
 
-    category_start_date_str = category_start_date.strftime("%Y-%m-%d") if category_start_date else ""
-    category_end_date_str = category_end_date.strftime("%Y-%m-%d") if category_end_date else ""
-
-    # Map item names to their group
     item_groups = dict(Item.objects.values_list('item_name', 'group'))
 
-    # Aggregate sales by group
     category_sales_dict = {}
-
-    billing_items = BillingItem.objects.filter(
+    for bi in BillingItem.objects.filter(
         created_at__date__gte=category_start_date,
         created_at__date__lte=category_end_date
-    )
-
-    for bi in billing_items:
+    ):
         group_name = item_groups.get(bi.item_name, 'Uncategorized')
         category_sales_dict[group_name] = category_sales_dict.get(group_name, 0) + bi.amount
 
-    # Convert to list of dicts and sort descending
-    category_sales = [
-        {'group': k, 'total_sales': v} 
-        for k, v in category_sales_dict.items()
-    ]
-    category_sales = sorted(category_sales, key=lambda x: x['total_sales'], reverse=True)
+    category_sales = sorted(
+        [{'group': k, 'total_sales': v} for k, v in category_sales_dict.items()],
+        key=lambda x: x['total_sales'],
+        reverse=True
+    )
 
-
-    # Top 10 Products by Revenue   
+    # ======================================================
+    # REVENUE TOP PRODUCTS
+    # ======================================================
     rev_start = request.GET.get('revenue_start_date')
     rev_end = request.GET.get('revenue_end_date')
+
     revenue_start_date = parse_date(rev_start) if rev_start else default_start
-    revenue_end_date = parse_date(rev_end) if rev_end else default_end   
+    revenue_end_date = parse_date(rev_end) if rev_end else default_end
 
-    revenue_start_date_str = revenue_start_date.strftime("%Y-%m-%d") if revenue_start_date else ""
-    revenue_end_date_str = revenue_end_date.strftime("%Y-%m-%d") if revenue_end_date else ""
-
-    top_revenue_qs = (
-        BillingItem.objects
-        .filter(created_at__date__gte=revenue_start_date, created_at__date__lte=revenue_end_date)
+    top_products = list(
+        BillingItem.objects.filter(
+            created_at__date__gte=revenue_start_date,
+            created_at__date__lte=revenue_end_date
+        )
         .values('item_name')
         .annotate(total_revenue=Sum('amount'))
         .order_by('-total_revenue')[:25]
     )
-    top_products = list(top_revenue_qs)
 
-    # Fetch all active users
+    # ======================================================
+    # USERS & LOGIN STATUS
+    # ======================================================
     active_users = User.objects.filter(is_active=True)
 
-    # Fetch users by group
     admins_count = User.objects.filter(groups__name='Admin', is_active=True).count()
     supervisors_count = User.objects.filter(groups__name='Supervisor', is_active=True).count()
     cashiers_count = User.objects.filter(groups__name='Cashier', is_active=True).count()
 
-    # Prepare user details for modal
     sessions = Session.objects.filter(expire_date__gte=timezone.now())
-    session_user_ids = [int(session.get_decoded().get('_auth_user_id')) for session in sessions if session.get_decoded().get('_auth_user_id')]
+    session_user_ids = [
+        int(s.get_decoded().get('_auth_user_id'))
+        for s in sessions
+        if s.get_decoded().get('_auth_user_id')
+    ]
 
     user_details = []
-    for user in active_users:
-        # Determine role
-        if user.is_superuser:
+    for u in active_users:
+        if u.is_superuser:
             role = 'Admin'
-        elif user.groups.filter(name='Supervisor').exists():
+        elif u.groups.filter(name='Supervisor').exists():
             role = 'Supervisor'
-        elif user.groups.filter(name='Cashier').exists():
+        elif u.groups.filter(name='Cashier').exists():
             role = 'Cashier'
         else:
             role = 'Other'
 
-        # Full name
-        full_name = f"{user.first_name} {user.last_name}".strip() or '-'
+        last_log = LoginLog.objects.filter(user=u).order_by('-login_time').first()
+        raw_machine_id = last_log.computer_name if last_log else "Unknown-Device"
 
-        # Currently logged in
-        currently_logged_in = user.id in session_user_ids
+        alias_obj = ComputerAlias.objects.filter(computer_name=raw_machine_id).first()
+        alias_name = alias_obj.alias_name if alias_obj else raw_machine_id
 
         user_details.append({
-            'username': user.username,
-            'full_name': full_name,
+            'username': u.username,
+            'full_name': f"{u.first_name} {u.last_name}".strip() or '-',
             'role': role,
-            'date_joined': user.date_joined,
-            'last_login': user.last_login,
-            'currently_logged_in': currently_logged_in,
+            'date_joined': u.date_joined,
+            'last_login': u.last_login,
+            'currently_logged_in': u.id in session_user_ids,
+            'computer_name': raw_machine_id,
+            'computer_alias': alias_name,
         })
 
-        bills = Billing.objects.filter(created_at__date=today)
+    # ======================================================
+    # CASH SUMMARY / BILLING SUMMARY
+    # ======================================================
+    bills = Billing.objects.filter(created_at__date=today)
 
-        # Default opening amount
-        opening_amt = 2000
+    opening_amt = 2000
+    total_sales = sum(b.total_amount for b in bills)
 
-        total_sales = sum(bill.total_amount for bill in bills)
-        credit_bills = bills.filter(bill_type="Credit")
-        todays_credit = credit_bills.aggregate(total=Sum("balance"))["total"] or 0       
-        refunds = SaleReturn.objects.filter(created_at__date=today)
-        sale_refund = refunds.aggregate(total=Sum("total_refund_amount"))["total"] or 0
-        # Credit amount cash received today
-        cash_received = BillingPayment.objects.filter(
-            payment_date__date=today,
-            payment_mode="Cash"
-        ).aggregate(total=Sum("new_payment"))["total"] or 0
+    todays_credit = bills.filter(bill_type="Credit").aggregate(
+        total=Sum("balance")
+    )["total"] or 0
 
-        # Credit amount card received today
-        card_received = BillingPayment.objects.filter(
-            payment_date__date=today,
-            payment_mode="Card"
-        ).aggregate(total=Sum("new_payment"))["total"] or 0
+    sale_refund = SaleReturn.objects.filter(
+        created_at__date=today
+    ).aggregate(total=Sum("total_refund_amount"))["total"] or 0
 
-        # Received amount cash received today
-        cash_received1 = Billing.objects.filter(
-            created_at__date=today,            
-        ).aggregate(total=Sum("cash_amount"))["total"] or 0
+    cash_received = BillingPayment.objects.filter(
+        payment_date__date=today,
+        payment_mode="Cash"
+    ).aggregate(total=Sum("new_payment"))["total"] or 0
 
-        # Received amount card received today
-        card_received1 = Billing.objects.filter(
-            created_at__date=today,           
-        ).aggregate(total=Sum("card_amount"))["total"] or 0
+    card_received = BillingPayment.objects.filter(
+        payment_date__date=today,
+        payment_mode="Card"
+    ).aggregate(total=Sum("new_payment"))["total"] or 0
 
-        received_amt = cash_received1 + card_received1
-        credit_received_amount = cash_received + card_received     
-        closing_amt = opening_amt + received_amt + credit_received_amount - sale_refund       
+    cash_received1 = Billing.objects.filter(
+        created_at__date=today
+    ).aggregate(total=Sum("cash_amount"))["total"] or 0
 
-        # last 30 days
-        one_month_ago = today - timedelta(days=30)
+    card_received1 = Billing.objects.filter(
+        created_at__date=today
+    ).aggregate(total=Sum("card_amount"))["total"] or 0
 
-        # Bills last month
-        bills_last_month = Billing.objects.filter(
-            created_at__date__gte=one_month_ago,
-            created_at__date__lte=today
-        )
+    received_amt = cash_received1 + card_received1
 
-        total_sales_last_month = sum(bill.total_amount for bill in bills_last_month)
-        credit_bills_last_month = bills_last_month.filter(bill_type__contains="Credit")
-        total_credit_last_month = credit_bills_last_month.aggregate(total=Sum("balance"))["total"] or 0
-        refunds_last_month = SaleReturn.objects.filter(
-            created_at__date__gte=one_month_ago,
-            created_at__date__lte=today
-        )
-        sale_refund_last_month = refunds_last_month.aggregate(total=Sum("total_refund_amount"))["total"] or 0
-        credit_received_amount_last_month = BillingPayment.objects.filter(
-            payment_date__date__gte=one_month_ago,
-            payment_date__date__lte=today
-        )
-        credit_received_amount_last_month1 = credit_received_amount_last_month.aggregate(total=Sum("new_payment"))["total"] or 0
-        received_amt_last_month = sum(bill.received for bill in bills_last_month)
+    closing_amt = (
+        opening_amt + received_amt +
+        (cash_received + card_received) -
+        sale_refund
+    )
 
-        # Bills fiscal year
-        year = today.year
-
-        # Determine fiscal year start and end
-        if today.month >= 4:
-            fiscal_start = date(year, 4, 1)
-            fiscal_end = date(year + 1, 3, 31)
-        else:
-            fiscal_start = date(year - 1, 4, 1)
-            fiscal_end = date(year, 3, 31)
-
-        bills_fiscal = Billing.objects.filter(created_at__date__gte=fiscal_start, created_at__date__lte=fiscal_end)    
-
-        total_sales_fiscal = sum(bill.total_amount for bill in bills_fiscal)
-        credit_bills_fiscal = bills_fiscal.filter(bill_type__contains="Credit")
-        todays_credit_fiscal = credit_bills_fiscal.aggregate(total=Sum("balance"))["total"] or 0
-        refunds_fiscal = SaleReturn.objects.filter(created_at__date__gte=fiscal_start, created_at__date__lte=fiscal_end)
-        sale_refund_fiscal = refunds_fiscal.aggregate(total=Sum("total_refund_amount"))["total"] or 0
-        credit_received_amount_year = BillingPayment.objects.filter(
-            payment_date__date__gte=fiscal_start,
-            payment_date__date__lte=fiscal_end
-        )
-        credit_received_amount_year1 = credit_received_amount_year.aggregate(total=Sum("new_payment"))["total"] or 0
-        received_amt_fiscal = sum(bill.received for bill in bills_fiscal)
-       
+    # ======================================================
+    # FINAL RENDER
+    # ======================================================
     return render(request, 'dashboard.html', {
+        'perm': perm,
         'transaction_count': transaction_count,
         'today_sales': today_sales,
         'yesterday_sales': yesterday_sales,
         'change_percentage': change_percentage,
+
         'no_stock_count': no_stock_count,
         'no_stock_items': no_stock_items,
         'low_stock_count': low_stock_count,
         'low_stock_items': low_stock_items,
+
         'recent_bills': recent_bills,
+
         'start_date': start_date,
         'end_date': end_date,
-        "top_start_date": top_start_date_str,
-        "top_end_date": top_end_date_str,
-        "category_start_date": category_start_date_str,
-        "category_end_date": category_end_date_str,
-        "revenue_start_date": revenue_start_date_str,
-        "revenue_end_date": revenue_end_date_str,
-        "user": request.user,
+
+        'top_start_date': top_start_date,
+        'top_end_date': top_end_date,
+
+        'category_start_date': category_start_date,
+        'category_end_date': category_end_date,
+
+        'revenue_start_date': revenue_start_date,
+        'revenue_end_date': revenue_end_date,
+
         'sales_trend': sales_trend,
         'top_selling': top_selling,
         'category_sales': category_sales,
-        'top_products': top_products,       
+        'top_products': top_products,
+
         'admin_count': admins_count,
         'supervisor_count': supervisors_count,
         'cashier_count': cashiers_count,
+
         'user_details': user_details,
-        "opening_amt": opening_amt,
-        "total_sales": total_sales,
-        "todays_credit": todays_credit,
-        "sale_refund": sale_refund,
-        "cash_received": cash_received,
-        "card_received": card_received,
-        "cash_received1": cash_received1,
-        "card_received1": card_received1,
-        "received_amt": received_amt,
-        "closing_amt": closing_amt,       
-        "total_sales_last_month": total_sales_last_month,
-        "total_credit_last_month": total_credit_last_month,
-        "sale_refund_last_month": sale_refund_last_month,
-        "credit_received_amount_last_month1": credit_received_amount_last_month1,
-        "received_amt_last_month": received_amt_last_month,
-        "total_sales_fiscal": total_sales_fiscal,
-        "todays_credit_fiscal": todays_credit_fiscal,
-        "sale_refund_fiscal": sale_refund_fiscal,
-        "credit_received_amount_year1": credit_received_amount_year1,
-        "received_amt_fiscal": received_amt_fiscal,       
+
+        'opening_amt': opening_amt,
+        'total_sales': total_sales,
+        'todays_credit': todays_credit,
+        'sale_refund': sale_refund,
+        'cash_received': cash_received,
+        'card_received': card_received,
+        'cash_received1': cash_received1,
+        'card_received1': card_received1,
+        'received_amt': received_amt,
+        'closing_amt': closing_amt,
     })
 
+
+@allow_settings
+def computer_alias_view(request):
+
+    edit_id = request.GET.get("edit")
+    delete_id = request.GET.get("delete")
+    create_name = request.GET.get("create")
+
+    # DELETE alias
+    if delete_id:
+        ComputerAlias.objects.filter(id=delete_id).delete()
+        return redirect("computer_alias")
+
+    # Object for edit mode
+    edit_obj = None
+
+    # Editing existing record
+    if edit_id:
+        edit_obj = ComputerAlias.objects.filter(id=edit_id).first()
+
+    # Creating new alias for a computer without alias
+    elif create_name:
+        edit_obj = type("obj", (), {
+            "id": "",
+            "computer_name": create_name,
+            "alias_name": ""
+        })()
+
+    # SAVE (Add / Update)
+    if request.method == "POST":
+        comp_name = request.POST.get("computer_name")
+        alias_name = request.POST.get("alias_name")
+        current_edit_id = request.POST.get("edit_id")
+
+        # UPDATE only if ID is numeric
+        if current_edit_id and current_edit_id.isdigit():
+            ComputerAlias.objects.filter(id=current_edit_id).update(
+                computer_name=comp_name,
+                alias_name=alias_name
+            )
+
+        else:  # CREATE new alias
+            ComputerAlias.objects.update_or_create(
+                computer_name=comp_name,
+                defaults={"alias_name": alias_name}
+            )
+
+        return redirect("computer_alias")
+
+    # List all computers that logged in
+    all_computers = LoginLog.objects.values_list("computer_name", flat=True).distinct()
+
+    combined_aliases = []
+    for comp in all_computers:
+        alias = ComputerAlias.objects.filter(computer_name=comp).first()
+        combined_aliases.append({
+            "id": alias.id if alias else None,
+            "computer_name": comp,
+            "alias_name": alias.alias_name if alias else comp,
+        })
+
+    combined_aliases = sorted(combined_aliases, key=lambda x: x["alias_name"])
+
+    return render(request, "computer_alias.html", {
+        "aliases": combined_aliases,
+        "edit_obj": edit_obj,
+    })
+
+
+
+
+@allow_billing
 def generate_report(request):
     report_type = request.GET.get("reportType")
     today = now().date()
@@ -654,11 +1283,11 @@ def generate_report(request):
         "report_type": report_type,
         "data": data
     })
-
+@allow_billing
 def billing_detail_view(request, id):
     bill = get_object_or_404(Billing, id=id)
     return render(request, 'billing_detail.html', {'bill': bill})
-
+@allow_billing
 def billing_items_api(request, bill_id):
     bill = get_object_or_404(Billing, id=bill_id)
     items = bill.items.all()  # use the related_name 'items'
@@ -676,7 +1305,7 @@ def billing_items_api(request, bill_id):
         })
     return JsonResponse({"items": items_data})
     
-
+@allow_billing
 def sales_chart_data(request):
     today = timezone.localdate()
     week_start = today - timedelta(days=today.weekday())  # Monday
@@ -727,241 +1356,247 @@ def sales_chart_data(request):
         'monthly_total': monthly_total
     })
 
+
+
+
+@allow_billing
 @login_required
 def create_invoice_view(request):
+    # ----------------------------------------------------------------------
+    # AJAX: return customer info by phone
+    # ----------------------------------------------------------------------
     if request.method == 'GET' and request.headers.get('x-requested-with') == 'XMLHttpRequest':
         phone = request.GET.get('phone')
         customer = Customer.objects.filter(cell=phone).first()
 
-        # Debug prints
-        print("Phone requested:", phone)
-        print("Customer object:", customer)
-         
-        if customer:
-            print("Name:", customer.name)
-            print("Email:", customer.email)
-            print("Address:", customer.address)
-            print("Date Joined:", customer.date_joined)
-        else:
-            print("Customer not found")
-
         last_billing = Billing.objects.filter(customer=customer).last() if customer else None
         points = last_billing.points if last_billing else 0
-        print("Points:", points)            
 
         return JsonResponse({
             'name': customer.name if customer else '',
-            'points': Billing.objects.filter(customer=customer).last().points if customer and Billing.objects.filter(customer=customer).exists() else 0,
+            'points': points,
             'email': customer.email if customer else '',
             'customer_address': customer.address if customer else '',
             'date_joined': str(customer.date_joined.date()) if customer and customer.date_joined else '',
             'remarks': '',
         })
 
+    # ----------------------------------------------------------------------
+    # POST: Save invoice
+    # ----------------------------------------------------------------------
     if request.method == 'POST':
         try:
-            cell = request.POST.get('cell').strip()
-            name = request.POST.get('name').strip()
-            email = request.POST.get('email', '').strip()
-            address = request.POST.get('address', '').strip()
+            with transaction.atomic():
+                cell = (request.POST.get('cell') or '').strip()
+                name = (request.POST.get('name') or '').strip()
+                email = (request.POST.get('email') or '').strip()
+                address = (request.POST.get('address') or '').strip()
 
-            # Get or create Customer
-            customer, _ = Customer.objects.get_or_create(cell=cell, defaults={
-                'name': name,
-                'email': email,
-                'address': address,
-            })
-
-            if not customer.name and name:
-                customer.name = name
-            if email and not customer.email:
-                customer.email = email
-            if address and not customer.address:
-                customer.address = address
-            customer.save()
-
-            # Generate next bill number
-            latest = Billing.objects.order_by('-id').first()
-            base_bill_no = int(latest.bill_no) + 1 if latest and str(latest.bill_no).isdigit() else 1
-            bill_no = str(base_bill_no)
-
-            # Optional: for points accumulation
-            previous_bill = Billing.objects.filter(customer=customer).order_by('-id').first()
-            total_points = previous_bill.points if previous_bill else 0.0
-            points_earned_total = 0.0         
-
-            cash = float(request.POST.get('cash_amount') or 0)
-            card = float(request.POST.get('card_amount') or 0)
-
-            items_json = request.POST.get('item_data', '[]')
-            items = json.loads(items_json)
-
-            # Calculate total sale amount from items
-            total_sale_amount = sum(float(item['amount']) for item in items)
-            # Get discount input (default 0)
-            discount = float(request.POST.get('discount') or 0)
-            # Calculate discount amount
-            discount_amt = total_sale_amount * discount / 100
-
-            print("POST data keys:", request.POST.keys())
-            print("Items:", items)
-            print("Total sale amount:", total_sale_amount)
-            print("Discount input:", discount)
-            print("Calculated discount_amt:", discount_amt)
-
-            # Create Billing object first
-            billing = Billing.objects.create(
-                customer=customer,
-                to=request.POST.get('to'),
-                bill_no=bill_no,
-                date=timezone.now(),
-                cash_amount=cash,            
-                card_amount=card,
-                bill_type=request.POST.get('bill_type'),
-                counter=request.POST.get('counter'),
-                order_no=request.POST.get('order_no'),
-                sale_type=request.POST.get('sale_type'),
-                received=request.POST.get('received') or 0,
-                balance = max(float(request.POST.get('balance') or 0), 0),        
-                discount=request.POST.get('discount') or 0,
-                discount_amt = discount_amt,
-                points=total_points,
-                points_earned=0,
-                remarks=request.POST.get('remarks', ''),
-                status_on="counter_bill",
-                created_by=request.user,
-            )
-
-            # Process items
-            snos = request.POST.getlist('sno')
-            codes = request.POST.getlist('code')
-            item_names = request.POST.getlist('item_name')
-            units = request.POST.getlist('unit')
-            qtys = request.POST.getlist('qty')
-            mrsps = request.POST.getlist('mrsp')
-            selling_prices = request.POST.getlist('sellingprice')
-
-            for i in range(len(item_names)):
-                if not any([codes[i].strip(), item_names[i].strip(), qtys[i].strip(), selling_prices[i].strip()]):
-                    continue
-
-                qty = round(float(qtys[i]), 2)
-                mrp = round(float(mrsps[i]), 2)
-                selling_price = round(float(selling_prices[i]), 2)
-                amount = round(qty * selling_price, 2)
-                points_earned = round(amount / 200, 2)
-                points_earned_total += points_earned
-
-                item_code = codes[i]
-                remaining_qty = qty
-
-                inventory_items = Inventory.objects.filter(
-                    code=item_code,
-                    quantity__gt=0
-                ).order_by('purchased_at', 'id')
-
-                item_inventory_details = []
-
-                for inv_item in inventory_items:
-                    if remaining_qty <= 0:
-                        break                 
-
-                    if "bulk" in inv_item.unit.lower():                        
-                        available_qty = inv_item.split_unit or 0
-                        deduct_qty = min(available_qty, remaining_qty)
-
-                        unit_quantity = inv_item.unit_qty or 1
-                        quantity_to_deduct = deduct_qty / unit_quantity
-
-                        # inv_item.split_unit -= deduct_qty
-                        new_split_unit = max(0, (inv_item.split_unit or 0) - deduct_qty)
-                        inv_item.split_unit = new_split_unit
-
-                        inv_item.quantity = round(inv_item.quantity - quantity_to_deduct, 1)
-
-                        if (inv_item.split_unit is None or inv_item.split_unit <= 0) or (inv_item.quantity is None or inv_item.quantity <= 0):
-                            inv_item.status = "completed"
-
-                        inv_item.save()
-
-                    else:
-                        available_qty = inv_item.quantity
-                        deduct_qty = min(available_qty, remaining_qty)
-
-                        inv_item.quantity -= deduct_qty
-
-                        if inv_item.quantity is None or inv_item.quantity <= 0:
-                            inv_item.status = "completed"
-
-                        inv_item.save()
-
-                    remaining_qty -= deduct_qty
-
-                if remaining_qty > 0:
-                    raise ValueError(f"Insufficient stock for item {item_names[i]} (Code: {item_code})")
-
-                # Save item to BillingItem table
-                BillingItem.objects.create(
-                    billing=billing,
-                    customer=billing.customer,
-                    code=codes[i],
-                    item_name=item_names[i],
-                    unit=units[i],
-                    qty=qty,
-                    mrp=mrp,
-                    selling_price=selling_price,
-                    amount=amount
+                # ---- Customer ----
+                customer, _ = Customer.objects.get_or_create(
+                    cell=cell,
+                    defaults={
+                        'name': name,
+                        'email': email,
+                        'address': address,
+                    },
                 )
 
-            # Update points after item processing
-            billing.points = total_points + points_earned_total
-            billing.points_earned = points_earned_total
-            billing.save()
+                # update missing fields if needed
+                if not customer.name and name:
+                    customer.name = name
+                if email and not customer.email:
+                    customer.email = email
+                if address and not customer.address:
+                    customer.address = address
+                customer.save()
 
-            messages.success(request, f"✅ Billing submitted successfully!")
-            
-            return redirect('billing')
+                # ---- Next bill number ----
+                latest = Billing.objects.order_by('-id').first()
+                base_bill_no = int(latest.bill_no) + 1 if latest and str(latest.bill_no).isdigit() else 1
+                bill_no = str(base_bill_no)
+
+                # ---- Old points ----
+                previous_bill = Billing.objects.filter(customer=customer).order_by('-id').first()
+                total_points = previous_bill.points if previous_bill else 0.0
+                points_earned_total = 0.0
+
+                cash = float(request.POST.get('cash_amount') or 0)
+                card = float(request.POST.get('card_amount') or 0)
+
+                items_json = request.POST.get('item_data', '[]')
+                items = json.loads(items_json)
+
+                # total from items
+                total_sale_amount = sum(float(item.get('amount') or 0) for item in items)
+
+                discount_percent = float(request.POST.get('discount') or 0)
+                discount_amt = total_sale_amount * discount_percent / 100
+
+                # ---- Create Billing ----
+                billing = Billing.objects.create(
+                    customer=customer,
+                    to=request.POST.get('to'),
+                    bill_no=bill_no,
+                    date=timezone.now(),
+                    cash_amount=cash,
+                    card_amount=card,
+                    bill_type=request.POST.get('bill_type'),
+                    counter=request.POST.get('counter'),
+                    order_no=request.POST.get('order_no'),
+                    sale_type=request.POST.get('sale_type'),
+                    received=request.POST.get('received') or 0,
+                    balance=max(float(request.POST.get('balance') or 0), 0),
+                    discount=discount_percent,
+                    discount_amt=discount_amt,
+                    points=total_points,
+                    points_earned=0,
+                    remarks=request.POST.get('remarks', ''),
+                    status_on="counter_bill",
+                    created_by=request.user,
+                )
+
+                # ---- Process items from normal form fields (table rows) ----
+                snos = request.POST.getlist('sno')
+                codes = request.POST.getlist('code')
+                item_names = request.POST.getlist('item_name')
+                units = request.POST.getlist('unit')
+                qtys = request.POST.getlist('qty')
+                mrsps = request.POST.getlist('mrsp')
+                selling_prices = request.POST.getlist('sellingprice')
+
+                for i in range(len(item_names)):
+                    if not any([
+                        (codes[i] or '').strip(),
+                        (item_names[i] or '').strip(),
+                        (qtys[i] or '').strip(),
+                        (selling_prices[i] or '').strip()
+                    ]):
+                        continue
+
+                    qty = round(float(qtys[i]), 2)
+                    mrp = round(float(mrsps[i] or 0), 2)
+                    selling_price = round(float(selling_prices[i] or 0), 2)
+                    amount = round(qty * selling_price, 2)
+
+                    # simple points: amount/200
+                    points_earned = round(amount / 200, 2)
+                    points_earned_total += points_earned
+
+                    item_code = codes[i]
+                    remaining_qty = qty
+
+                    # ---- FIFO stock deduction ----
+                    inventory_items = Inventory.objects.filter(
+                        code=item_code,
+                        quantity__gt=0
+                    ).order_by('purchased_at', 'id')
+
+                    for inv_item in inventory_items:
+                        if remaining_qty <= 0:
+                            break
+
+                        if "bulk" in (inv_item.unit or '').lower():
+                            available_qty = inv_item.split_unit or 0
+                            deduct_qty = min(available_qty, remaining_qty)
+
+                            unit_quantity = inv_item.unit_qty or 1
+                            quantity_to_deduct = deduct_qty / unit_quantity
+
+                            new_split_unit = max(0, (inv_item.split_unit or 0) - deduct_qty)
+                            inv_item.split_unit = new_split_unit
+                            inv_item.quantity = round((inv_item.quantity or 0) - quantity_to_deduct, 1)
+
+                            if (inv_item.split_unit is None or inv_item.split_unit <= 0) or \
+                               (inv_item.quantity is None or inv_item.quantity <= 0):
+                                inv_item.status = "completed"
+
+                            inv_item.save()
+
+                        else:
+                            available_qty = inv_item.quantity or 0
+                            deduct_qty = min(available_qty, remaining_qty)
+
+                            inv_item.quantity = (inv_item.quantity or 0) - deduct_qty
+
+                            if inv_item.quantity is None or inv_item.quantity <= 0:
+                                inv_item.status = "completed"
+
+                            inv_item.save()
+
+                        remaining_qty -= deduct_qty
+
+                    if remaining_qty > 0:
+                        raise ValueError(f"Insufficient stock for item {item_names[i]} (Code: {item_code})")
+
+                    BillingItem.objects.create(
+                        billing=billing,
+                        customer=billing.customer,
+                        code=codes[i],
+                        item_name=item_names[i],
+                        unit=units[i],
+                        qty=qty,
+                        mrp=mrp,
+                        selling_price=selling_price,
+                        amount=amount
+                    )
+
+                # ---- update points ----
+                billing.points = total_points + points_earned_total
+                billing.points_earned = points_earned_total
+                billing.save()
+
+                messages.success(request, "✅ Billing submitted successfully!")
+                return redirect('billing')
 
         except Exception as e:
             print(f"[ERROR] Invoice creation failed: {e}")
-            return render(request, 'billing.html', {
-                'error': 'Something went wrong while saving the invoice.'
-            })
+            messages.error(request, "Something went wrong while saving the invoice.")
+            # fall through to GET-render with error
 
-    # GET request for normal page
+    # ----------------------------------------------------------------------
+    # GET: normal page render
+    # ----------------------------------------------------------------------
     latest_bill = Billing.objects.order_by('-id').first()
     next_bill_no = str(int(latest_bill.bill_no) + 1) if latest_bill and str(latest_bill.bill_no).isdigit() else '1'
     today_date = timezone.now().strftime('%Y-%m-%d')
 
     bill_types = BillType.objects.all().order_by('billtype_id')
     payment_modes = PaymentMode.objects.all()
-    counter = Counter.objects.all().order_by('counter_id')
+    counters = Counter.objects.all().order_by('counter_id')
 
-    # Company details information
-    company = CompanyDetails.objects.first()  # assuming only 1 company record
+    # company
+    company = CompanyDetails.objects.first()
 
-    # Points configuration data
+    # points config
     points_config = PointsConfig.objects.order_by('-updated_at').first()
-    amount_for_one_point = points_config.amount_for_one_point if points_config else 200  # fallback 200
+    amount_for_one_point = points_config.amount_for_one_point if points_config else 200
 
-    # Fetch latest BillingConfig
+    # billing config / GST
     billing_config = BillingConfig.objects.order_by('-id').first()
     enable_gst = billing_config.enable_gst if billing_config else False
 
-    print("BillingConfig object:", billing_config)
-    print("Enable GST flag:", enable_gst)
+    # ------------------------------------------------------------------
+    # Resolve current computer name + alias (NO user field on ComputerAlias!)
+    # ------------------------------------------------------------------
+    last_log = LoginLog.objects.filter(user=request.user).order_by('-login_time').first()
+    raw_computer_name = last_log.computer_name if last_log else ""
+    alias_obj = ComputerAlias.objects.filter(computer_name=raw_computer_name).first()
+    current_counter_name = alias_obj.alias_name if alias_obj else raw_computer_name
 
     return render(request, 'billing.html', {
         'today_date': today_date,
         'bill_no': next_bill_no,
-        'bill_types':bill_types,
-        'payment_modes':payment_modes,
-        'counter':counter,
-        "company": company,
-        "amount_for_one_point": amount_for_one_point,
+        'bill_types': bill_types,
+        'payment_modes': payment_modes,
+        'counter': counters,
+        'company': company,
+        'amount_for_one_point': amount_for_one_point,
         'enable_gst': enable_gst,
+        'current_counter_name': current_counter_name,  # <- use this in template if needed
     })
 
+@allow_billing
 def get_item_info(request):
     code = request.GET.get('code', '').strip()
     name = request.GET.get('name', '').strip()
@@ -1075,7 +1710,7 @@ def get_item_info(request):
         'batch_details': merged_batches,
         'all_batch_nos': all_batch_nos
     })
-
+@allow_billing
 def get_itemname_info(request):
     """
     Return item name/code suggestions for autocomplete.
@@ -1097,7 +1732,7 @@ def get_itemname_info(request):
 
     return JsonResponse({'suggestions': suggestions})
 
-@access_required(allowed_roles=['superuser','staff'])
+@allow_config_view
 def add_billtype(request):
 
     # -----------------------------
@@ -1203,7 +1838,7 @@ def add_billtype(request):
         "config": billing_config,
     })
 
-
+@allow_payments
 def order_payments(request, order_id):
     payments = Order.objects.filter(order_id=order_id).values(
         'order_id', 'customer_name', 'total_amount', 
@@ -1213,7 +1848,7 @@ def order_payments(request, order_id):
     payments_list = list(payments)
     return JsonResponse({'payments': payments_list})
 
-@access_required(allowed_roles=['superuser','staff'])
+@allow_payments
 def billing_edit(request, pk):
     bill = get_object_or_404(Billing, pk=pk)
 
@@ -1301,7 +1936,7 @@ def billing_edit(request, pk):
         "discounted_total": discounted_total
     })
 
-@access_required(allowed_roles=['superuser'])
+@allow_payments
 def payment_list_view(request):
     from_date = request.GET.get('from_date')
     to_date = request.GET.get('to_date')
@@ -1391,7 +2026,7 @@ def payment_list_view(request):
         'total_amount': total_amount
     })
 
-@access_required(allowed_roles=['superuser'])
+@allow_payments
 def get_payments(request, billing_id):
     payments = BillingPayment.objects.filter(billing_id=billing_id).order_by('payment_date')
     data = []
@@ -1409,7 +2044,7 @@ def get_payments(request, billing_id):
         })
     return JsonResponse({'payments': data})
 
-@access_required(allowed_roles=['superuser','staff'])
+#
 def order_view(request):
     return render(request, 'order.html')
 
@@ -1582,7 +2217,7 @@ def get_last_quotation(request):
     }
     
     return JsonResponse(data)
-
+@allow_payments
 def update_payment(request, order_id):
     order = get_object_or_404(Order, pk=order_id)
 
@@ -1823,7 +2458,7 @@ def convert_quotation_to_order(request, qtn_no):
 
     return redirect('order_list')
 
-@access_required(allowed_roles=['superuser','staff'])
+@allow_items
 def item_creation(request):  
     if request.method == "POST":
         code = request.POST.get('code')
@@ -1903,7 +2538,7 @@ def item_creation(request):
         'taxes': Tax.objects.all()
     }
     return render(request, 'items.html', context)
-
+@allow_items
 def fetch_item_by_code(request):
     code = request.GET.get('code')
     if not code:
@@ -1938,7 +2573,7 @@ def fetch_item_by_code(request):
     except Item.DoesNotExist:
         return JsonResponse({'exists': False})
     
-@access_required(allowed_roles=['superuser','staff'])
+@allow_items
 def items_list(request):
     query_name = request.GET.get('name', '').strip()
     query_code = request.GET.get('code', '').strip()
@@ -1958,7 +2593,7 @@ def items_list(request):
     }
     return render(request, 'items_list.html', context) 
 
-@access_required(allowed_roles=['superuser','staff'])  # if you want access control
+@allow_items
 def delete_item(request, item_id):
     item = get_object_or_404(Item, id=item_id)
 
@@ -1970,7 +2605,7 @@ def delete_item(request, item_id):
     messages.error(request, "Invalid request method.")
     return redirect('items_list')
     
-@access_required(allowed_roles=['superuser','staff'])    
+@allow_items  
 @csrf_exempt
 def check_item_code(request):
     code = request.GET.get("code", "").strip()
@@ -2030,7 +2665,7 @@ def build_label(item, label_size):
         tspl += f'BARCODE {base_x + offset_x},{base_y + 112},"39",40,0,0,1,4,"{barcode_clean}"\n'
     tspl += "PRINT 1\n"
     return tspl    
-
+@allow_barcodes
 def print_barcode(request):
     if request.method == "POST":
         label_size = request.POST.get("label_size", "35x22")
@@ -2105,7 +2740,7 @@ def print_barcode(request):
         return redirect("print_barcode")
 
     return render(request, "print_barcode.html")
-
+@allow_barcodes
 def fetch_item_details(request):
     code = request.GET.get("code")
     name = request.GET.get("name")
@@ -2161,7 +2796,7 @@ def fetch_item_details(request):
 
     except Item.DoesNotExist:
         return JsonResponse({"error": "Item not found"}, status=404)
-    
+@allow_barcodes    
 def get_itemname1_info(request):
     """
     Return item suggestions with batch information for autocomplete (partial search).
@@ -2201,7 +2836,7 @@ def get_itemname1_info(request):
 
     return JsonResponse({"suggestions": list(item_dict.values())})
 
-@access_required(allowed_roles=['superuser','staff'])
+#
 def Unit_creation(request):
     if request.method == 'POST':
         unit_name = request.POST.get('unit_name')
@@ -2226,7 +2861,7 @@ def Unit_creation(request):
 
     return render(request, 'unit.html')
 
-@access_required(allowed_roles=['superuser','staff'])
+#
 def Group_creation(request):
     if request.method == 'POST':
         group_name = request.POST.get('group_name')
@@ -2261,7 +2896,7 @@ def Group_creation(request):
 
     return render(request, 'group.html')
 
-@access_required(allowed_roles=['superuser'])
+#
 def Brand_creation(request):
     if request.method == 'POST':
         brand_name = request.POST.get('brand_name')
@@ -2288,7 +2923,7 @@ def Brand_creation(request):
 
     return render(request, 'brand.html')
 
-@access_required(allowed_roles=['superuser'])
+#
 def Tax_creation(request):
     if request.method =='POST':
         tax_name = request.POST.get('tax_name')
@@ -2355,7 +2990,7 @@ def Tax_creation(request):
         return redirect('tax_creation')
     return render(request,'tax.html')
 
-
+@allow_sales_return
 def sale_return_view(request):
     billing = None
     billing_items = []
@@ -2534,15 +3169,15 @@ def sale_return_view(request):
 
 
 from django.contrib import messages
-
+@allow_sales_return
 def sale_return_success_view(request):
     messages.success(request, "Sale return processed successfully.")    
     return redirect('sale_return')
-
+@allow_sales_return
 def sale_return_detail(request, pk):
     sale_return = get_object_or_404(SaleReturn, pk=pk)   
     return render(request, 'sale_return_detail.html', {'sale_return': sale_return})
-
+@allow_sales_return
 def sale_return_items_api(request):
     sale_return_id = request.GET.get('sale_return_id')
     items_qs = SaleReturnItem.objects.filter(sale_return_id=sale_return_id)
@@ -2559,7 +3194,7 @@ def sale_return_items_api(request):
             'return_amount': float(item.return_amount),
         })
     return JsonResponse({'items': items})
-    
+@allow_products   
 def products_view(request):
     name_query = request.GET.get('name_query', '').strip()
     code_query = request.GET.get('code_query', '').strip()
@@ -2610,11 +3245,11 @@ def products_view(request):
 from django.shortcuts import render, redirect, get_object_or_404
 from .models import BarcodeLabelSize
 from .forms import BarcodeLabelSizeForm
-
+@allow_barcodes
 def label_size_list(request):
     sizes = BarcodeLabelSize.objects.all()
     return render(request, "label_size_list.html", {"sizes": sizes})
-
+@allow_barcodes
 def label_size_create(request):
     if request.method == "POST":
         form = BarcodeLabelSizeForm(request.POST)
@@ -2624,7 +3259,7 @@ def label_size_create(request):
     else:
         form = BarcodeLabelSizeForm()
     return render(request, "label_size_form.html", {"form": form})
-
+@allow_barcodes
 def label_size_edit(request, pk):
     size = get_object_or_404(BarcodeLabelSize, pk=pk)
     if request.method == "POST":
@@ -2635,7 +3270,7 @@ def label_size_edit(request, pk):
     else:
         form = BarcodeLabelSizeForm(instance=size)
     return render(request, "label_size_form.html", {"form": form})
-
+@allow_barcodes
 def label_size_delete(request, pk):
     size = get_object_or_404(BarcodeLabelSize, pk=pk)
     size.delete()
@@ -2647,7 +3282,7 @@ def label_size_delete(request, pk):
 
 
 
-@access_required(allowed_roles=['superuser'])
+@allow_purchase
 def purchase_view(request):
     if request.method == 'POST':
         supplier_id = request.POST.get('supplier')
@@ -2702,7 +3337,7 @@ def purchase_view(request):
     }
     return render(request, 'purchase.html', context)
 
-@access_required(allowed_roles=['superuser'])
+@allow_purchase
 def purchase_list(request):
     supplier_id = request.GET.get('supplier')
     sort_order = request.GET.get('sort', 'desc')
@@ -2740,7 +3375,7 @@ def purchase_list(request):
         'item_name': item_name,
     }
     return render(request, 'purchase_list.html', context)
-
+@allow_purchase
 def export_purchases(request):
     # Example: return CSV
     response = HttpResponse(content_type='text/csv')
@@ -2748,7 +3383,7 @@ def export_purchases(request):
     response.write("id,supplier,amount\n")
     return response
 
-@access_required(allowed_roles=['superuser'])
+@allow_purchase
 def fetch_item(request):
     name = request.GET.get('name', '').strip()
     code = request.GET.get('code', '').strip()
@@ -2783,7 +3418,7 @@ def fetch_item(request):
 
     return JsonResponse({'error': 'Item not found'}, status=404)
 
-@access_required(allowed_roles=['superuser'])
+@allow_purchase
 @csrf_exempt
 def create_purchase(request):
     if request.method != "POST":
@@ -3136,7 +3771,7 @@ def create_purchase(request):
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=400)
 
-@access_required(allowed_roles=['superuser'])
+@allow_purchase
 def fetch_purchase_items(request):
     invoice_number = request.GET.get('invoice_number')    
 
@@ -3185,7 +3820,7 @@ def fetch_purchase_items(request):
 
     print("Returning", len(items_data), "items for invoice:", invoice_number)
     return JsonResponse({'items': items_data, 'purchase': purchase_data})
-
+@allow_purchase
 def daily_purchase_payment_view(request):
     if request.method == "POST":       
         
@@ -3217,7 +3852,7 @@ def daily_purchase_payment_view(request):
   
     suppliers = Supplier.objects.all()
     return render(request, 'daily_purchase_payment.html', {"suppliers": suppliers})
-
+@allow_purchase
 def get_invoice_details(request):
     invoice_no = request.GET.get("invoice_no", "").strip()
     data = {
@@ -3234,7 +3869,7 @@ def get_invoice_details(request):
             }
 
     return JsonResponse(data)
-
+@allow_purchase
 def purchase_payment_list_view(request):
     payments = DailyPurchasePayment.objects.select_related('supplier').order_by('-created_at')
 
@@ -3290,7 +3925,7 @@ def purchase_payment_list_view(request):
         'start_date': start_date,
         'end_date': end_date
     })
-
+@allow_purchase
 def purchase_tracking(request):  
     purchase_tracking_summary = PurchaseTracking.objects.select_related(
         'purchase', 'purchase__supplier'
@@ -3320,11 +3955,11 @@ def purchase_tracking(request):
         'purchase_tracking_summary': purchase_tracking_summary
     })
 
-@access_required(allowed_roles=['superuser'])
+@allow_purchase
 def purchase_page(request):
     return render(request, "purchase.html")
 
-@access_required(allowed_roles=['superuser'])
+@allow_inventory
 @csrf_exempt
 def stock_adjustment_view(request):
     # Get latest item ID for each code
@@ -3538,7 +4173,7 @@ def stock_adjustment_view(request):
         "unique_products": unique_products
     })
 
-@access_required(allowed_roles=['superuser'])
+@allow_inventory
 def stock_adjustment_list(request):
     adjustments = StockAdjustment.objects.all()
 
@@ -3573,7 +4208,7 @@ def stock_adjustment_list(request):
         }
     })
 
-@access_required(allowed_roles=['superuser'])
+@allow_inventory
 def edit_bulk_item(request, item_id):
     bulk_item = get_object_or_404(Inventory, id=item_id)
 
@@ -3639,7 +4274,7 @@ def edit_bulk_item(request, item_id):
 
     return render(request, 'edit_bulk_item.html', {'item': bulk_item})
 
-@access_required(allowed_roles=['superuser'])
+@allow_inventory
 def fetch_item_info(request):
     code = request.GET.get('code')
     name = request.GET.get('name')
@@ -3667,7 +4302,7 @@ def fetch_item_info(request):
     
     return JsonResponse({'error': 'Item not found'}, status=404)
 
-@access_required(allowed_roles=['superuser'])
+@allow_inventory
 def inventory_view(request):
     query = request.GET.get('q', '').strip()
 
@@ -3690,7 +4325,7 @@ def inventory_view(request):
         'items': items
     })
 
-@access_required(allowed_roles=['superuser'])
+@allow_inventory
 def split_stock_page(request):
     queryset = Inventory.objects.filter(unit__icontains='bulk', split_unit__gt=0)
 
@@ -3726,12 +4361,12 @@ def split_stock_page(request):
         'filters': filters,
     })
 
-@access_required(allowed_roles=['superuser'])
+@allow_products
 def product_detail(request, pk):
     product = get_object_or_404(Product, pk=pk)
     return render(request, 'product_detail.html', {'product': product})
 
-@access_required(allowed_roles=['superuser'])
+@allow_suppliers
 def suppliers_view(request):
     search_query = request.GET.get('q', '')
     suppliers = Supplier.objects.all()
@@ -3759,7 +4394,7 @@ def suppliers_view(request):
         'form': form,
     })
 
-@access_required(allowed_roles=['superuser'])
+@allow_suppliers
 def add_supplier(request):
     if request.method == 'POST':      
 
@@ -3784,7 +4419,7 @@ def add_supplier(request):
 
     return render(request, 'add_supplier.html')
 
-@access_required(allowed_roles=['superuser'])
+@allow_suppliers
 def edit_supplier(request, supplier_id):
     supplier = get_object_or_404(Supplier, pk=supplier_id)
 
@@ -3809,7 +4444,7 @@ def edit_supplier(request, supplier_id):
         return redirect('suppliers')
     return render(request, 'edit_supplier.html', {'supplier': supplier})
 
-@access_required(allowed_roles=['superuser'])
+@allow_suppliers
 def delete_supplier(request, supplier_id):
     supplier = get_object_or_404(Supplier, pk=supplier_id)
     supplier.delete()
@@ -3817,8 +4452,7 @@ def delete_supplier(request, supplier_id):
 
 from django.contrib.auth.decorators import login_required, user_passes_test
 
-@login_required
-@access_required(allowed_roles=['superuser'])
+@allow_customers
 def customers_view(request):
     try:
         start_date = request.GET.get("start")
@@ -3869,7 +4503,7 @@ def customers_view(request):
         "phone": phone,
     })
  
-@access_required(allowed_roles=['superuser'])
+@allow_customers
 def add_customer(request):
     if request.method == 'POST':
         name = request.POST.get('name')
@@ -3899,8 +4533,7 @@ def add_customer(request):
 
     return render(request, 'add_customer.html')
 
-@login_required
-@access_required(allowed_roles=['superuser'])
+@allow_customers
 def edit_customer(request, id):
     customer = get_object_or_404(Customer, id=id)
 
@@ -3933,14 +4566,14 @@ def edit_customer(request, id):
 
     return render(request, "edit_customer.html", {"customer": customer})
 
-@access_required(allowed_roles=['superuser'])
+@allow_purchase
 def purchase_items_view(request):
     
     # Start with all PurchaseItems and select related purchase & supplier
     items = PurchaseItem.objects.select_related(
         "purchase",
         "purchase__supplier"
-    ).all().order_by('-purchase__id')
+    ).all().order_by('purchase__id')
 
     # Fetch suppliers for the dropdown
     suppliers = Supplier.objects.all()
@@ -3969,7 +4602,7 @@ def purchase_items_view(request):
     }
 
     return render(request, "purchase_items.html", context)
-
+@allow_purchase
 def purchase_payments_api(request, invoice_no):
     payments = PurchasePayment.objects.filter(invoice_no=invoice_no).order_by('payment_date')
     data = [
@@ -3987,7 +4620,7 @@ def purchase_payments_api(request, invoice_no):
     ]
     return JsonResponse({"payments": data})
 
-@access_required(allowed_roles=['superuser'])
+@allow_expenses
 def create_expense(request):
     if request.method == 'POST':
         form = ExpenseForm(request.POST, request.FILES)
@@ -4000,7 +4633,7 @@ def create_expense(request):
         form = ExpenseForm()
     return render(request, 'expense.html', {'form': form})
 
-@access_required(allowed_roles=['superuser'])
+@allow_expenses
 def expense_list(request):
     from_date = request.GET.get('from_date')
     to_date = request.GET.get('to_date')
@@ -4066,3 +4699,151 @@ def backup_company_details(instance, backup_dir):
         f.write(data)
 
     print(f"CompanyDetails backup saved at: {backup_file}")
+
+
+import MySQLdb
+from django.shortcuts import render, redirect
+from django.contrib import messages
+from django.db import connection
+from .models import MigrationLog
+import psycopg2
+from psycopg2 import sql
+from django.http import JsonResponse
+
+
+def db_migration_tool(request):
+    # Load MySQL tables for dropdown
+    try:
+        mysql_conn = MySQLdb.connect(
+            host="localhost",
+            user="root",
+            passwd="YOUR_MYSQL_PASSWORD",
+            db="YOUR_MYSQL_DB"
+        )
+        cursor = mysql_conn.cursor()
+        cursor.execute("SHOW TABLES")
+        tables = [row[0] for row in cursor.fetchall()]
+        mysql_conn.close()
+    except Exception:
+        tables = []
+
+    logs = MigrationLog.objects.all().order_by("-migrated_at")
+
+    return render(request, "db_migrate.html", {
+        "tables": tables,
+        "logs": logs
+    })
+
+
+def migrate_single_table(request):
+    if request.method != "POST":
+        return redirect("db_migration_tool")
+
+    mysql_table = request.POST.get("mysql_table")
+    postgres_table = request.POST.get("postgres_table")
+
+    log = MigrationLog(mysql_table=mysql_table, postgres_table=postgres_table)
+
+    try:
+        # Connect MySQL
+        mysql_conn = MySQLdb.connect(
+            host="localhost",
+            user="root",
+            passwd="YOUR_MYSQL_PASSWORD",
+            db="YOUR_MYSQL_DB"
+        )
+        mysql_cur = mysql_conn.cursor()
+
+        # Connect Postgres
+        pg_conn = psycopg2.connect(
+            host="localhost",
+            user="postgres",
+            password="YOUR_PG_PASSWORD",
+            dbname="YOUR_POSTGRES_DB"
+        )
+        pg_cur = pg_conn.cursor()
+
+        # ===== FETCH STRUCTURE =====
+        mysql_cur.execute(f"SHOW COLUMNS FROM {mysql_table}")
+        columns = mysql_cur.fetchall()
+
+        # Auto-create table if missing
+        col_defs = []
+        for col in columns:
+            name, col_type = col[0], col[1]
+
+            if "int" in col_type:
+                pg_type = "INTEGER"
+            elif "decimal" in col_type:
+                pg_type = "DECIMAL(18,2)"
+            elif "date" in col_type:
+                pg_type = "DATE"
+            elif "datetime" in col_type:
+                pg_type = "TIMESTAMP"
+            else:
+                pg_type = "TEXT"
+
+            col_defs.append(f'"{name}" {pg_type}')
+
+        create_query = f'CREATE TABLE IF NOT EXISTS "{postgres_table}" ({",".join(col_defs)});'
+        pg_cur.execute(create_query)
+        pg_conn.commit()
+
+        # ===== FETCH ROWS =====
+        mysql_cur.execute(f"SELECT * FROM {mysql_table}")
+        rows = mysql_cur.fetchall()
+        row_count = len(rows)
+
+        columns_only = [c[0] for c in columns]
+        col_str = ",".join(f'"{c}"' for c in columns_only)
+        placeholder = ",".join(["%s"] * len(columns_only))
+
+        # ===== INSERT INTO POSTGRES =====
+        for row in rows:
+            query = f'INSERT INTO "{postgres_table}" ({col_str}) VALUES ({placeholder})'
+            pg_cur.execute(query, row)
+
+        pg_conn.commit()
+
+        log.migrated_rows = row_count
+        log.status = "Success"
+        messages.success(request, f"{mysql_table} → {postgres_table} migrated ({row_count} rows)")
+
+    except Exception as e:
+        log.status = "Failed"
+        log.error_message = str(e)
+        messages.error(request, f"Migration failed: {e}")
+
+    finally:
+        log.save()
+        try: mysql_conn.close()
+        except: pass
+        try: pg_conn.close()
+        except: pass
+
+    return redirect("db_migration_tool")
+
+
+def migrate_all_tables(request):
+    try:
+        mysql_conn = MySQLdb.connect(
+            host="localhost",
+            user="root",
+            passwd="YOUR_MYSQL_PASSWORD",
+            db="YOUR_MYSQL_DB"
+        )
+        cursor = mysql_conn.cursor()
+        cursor.execute("SHOW TABLES")
+        tables = [row[0] for row in cursor.fetchall()]
+        mysql_conn.close()
+
+        for table in tables:
+            request.POST = {"mysql_table": table, "postgres_table": table}
+            migrate_single_table(request)
+
+        messages.success(request, "Entire MySQL database migrated successfully!")
+
+    except Exception as e:
+        messages.error(request, f"Migration failed: {e}")
+
+    return redirect("db_migration_tool")

@@ -1,0 +1,10 @@
+{% for g in groups %}
+<div class="group-toggle">
+    <span>{{ g.name }}</span>
+
+    <label class="switch-wrapper">
+        <input type="checkbox" onclick="toggleGroup({{ g.id }})">
+        <span class="switch-slider"></span>
+    </label>
+</div>
+{% endfor %}

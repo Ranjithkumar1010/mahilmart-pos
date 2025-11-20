@@ -237,12 +237,10 @@
             
             <div class="form-group">
                 <label>Counter :</label>
-                <select name="counter" style="padding:6px;">
-                    {% for count in counter %}
-                    <option value="{{ count.counter_name }}">{{ count.counter_name }}</option>
-                    {% endfor %}
-                </select>
+                <input type="text" value="{{ current_counter_name }}" readonly>
+                <input type="hidden" name="counter" value="{{ current_counter_name }}">
             </div>
+
                                    
             <div class="form-group"><label>Phone : (default - 9876543210)</label><input type="text" id="cell" name="cell" placeholder="Enter phone number" pattern="[6-9][0-9]{9}" maxlength="10" title="Enter 10 digitNumber starting with 6, 7, 8, or 9" required autocomplete="off"></div>
             <div class="form-group full-width"><label>Name :</label><input type="text" id="name" name="name" placeholder="" required></div> 

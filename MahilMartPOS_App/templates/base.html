@@ -17,23 +17,61 @@
 
     <style>
         :root {
-            --primary-dark: #1f2a38;
-            --primary: #2e3b4e;
-            --primary-light: #32465a;
-            --accent: #4a6fa5;
+            /* Saved theme colors from DB */
+            --primary: {{ theme.primary_color|default:'#2e3b4e' }};
+            --primary-dark: {{ theme.sidebar_color|default:'#1f2a38' }};
+            --accent: {{ theme.accent_color|default:'#4a6fa5' }};
             --text-light: #f8f9fa;
             --text-muted: #adb5bd;
+
             --shadow-sm: 0 2px 8px rgba(0,0,0,0.08);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.12);
             --transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
         }
 
+        /* 🌙 DARK MODE STYLES (applied when body.dark-mode exists) */
+        body.dark-mode {
+            --primary: #1a2634 !important;
+            --primary-dark: #0d1117 !important;
+            --primary-light: #223042 !important;
+            --accent: #4a6fa5 !important;
+            --text-light: #ffffff !important;
+            --text-muted: #c3c3c3 !important;
+
+            background: #0d1117 !important;
+            color: var(--text-light);
+        }
+
+        body.dark-mode .app-header {
+            background: var(--primary) !important;
+        }
+
+        body.dark-mode .app-sidebar {
+            background: var(--primary-dark) !important;
+        }
+
+        body.dark-mode .app-content {
+            background: #111821 !important;
+        }
+
+        body.dark-mode .card,
+        body.dark-mode .theme-card {
+            background: #1f2a33 !important;
+            color: white !important;
+        }
+
+        body.dark-mode .nav-item a {
+            color: #cccccc !important;
+        }
         html, body {
             height: 100%;
             margin: 0;
             overflow: hidden;
             font-family: 'Segoe UI', 'Roboto', sans-serif;
         }
+        
+       
+
 
         .app-container {
             display: flex;
@@ -366,8 +404,8 @@
         }
     </style>
 </head>
-<body>
-  
+<body class="{% if theme.mode == 'dark' %}dark-mode{% endif %}">
+
 <header class="app-header">
     <div class="d-flex align-items-center gap-3">
         <button class="sidebar-toggle" id="sidebarToggle">
@@ -386,9 +424,9 @@
             {% if request.user.is_superuser %}
                 Store Admin
             {% elif request.user.is_staff %}
-                Cashier
+                Store Supervisor
             {% else %}
-                User
+                Cashier 
             {% endif %}
         </span>
 
@@ -403,104 +441,151 @@
 </header>
 
 <div class="app-container">
-    <!-- Premium Sidebar -->
     <aside class="app-sidebar" id="appSidebar">
         <ul class="nav-menu">
-            <li class="nav-item active" data-page="dashboard">
+
+            {% if request.user.is_superuser or perm.allow_dashboard %}
+            <li class="nav-item">
                 <a href="{% url 'dashboard' %}">
-                    <i class="fas fa-tachometer-alt"></i>Dashboard
-                </a>
-            </li>          
-            <li class="nav-item" data-page="billing">
-                <a href="{% url 'billing' %}">
-                    <i class="fas fa-cash-register"></i>Billing
-                </a>
-            </li>       
-            <li class="nav-item" data-page="sale_return">
-                <a href="{% url 'sale_return' %}">
-                    <i class="fas fa-undo-alt"></i>Sales Return
-                </a>
-            </li>
-            <li class="nav-item" data-page="products">
-                <a href="{% url 'products' %}">
-                    <i class="fas fa-boxes"></i>Products
-                </a>
-            </li>
-
-            {% if request.user.is_superuser or request.user.is_staff %}
-            <li class="nav-item" data-page="items">
-                <a href="{% url 'items' %}">
-                    <i class="fas fa-box"></i>Items
-                </a>
-            </li>
-            <li class="nav-item" data-page="purchase">
-                <a href="{% url 'purchase' %}">
-                    <i class="fas fa-truck-loading"></i>Purchase
-                </a>
-            </li>
-                       
-            <li class="nav-item" data-page="inventory">
-                <a href="{% url 'inventory' %}">
-                    <i class="fas fa-warehouse"></i>Inventory
-                </a>
-            </li>
-            <li class="nav-item" data-page="suppliers">
-                <a href="{% url 'suppliers' %}">
-                    <i class="fas fa-truck"></i>Suppliers
-                </a>
-            </li>
-            <li class="nav-item" data-page="customers">
-                <a href="{% url 'customers' %}">
-                    <i class="fas fa-users"></i>Customers
-                </a>
-            </li>
-
-            <li class="nav-item" data-page="payments">
-                <a href="{% url 'payment-list' %}">
-                    <i class="fas fa-money-check-alt"></i>Payments
-                </a>
-            </li>
-
-            <li class="nav-item" data-page="expenses">
-                <a href="{% url 'expense' %}">
-                    <i class="fas fa-file-invoice-dollar"></i>Expenses
-                </a>
-            </li>
-
-            <li class="nav-item" data-page="Config View">
-                <a href="{% url 'add' %}">
-                    <i class="fas fa-file-invoice-dollar"></i>Config View
-                </a>
-            </li>
-
-            <li class="nav-item" data-page="barcodes">
-                <a href="{% url 'label_size_list' %}">
-                    <i class="fas fa-barcode"></i>Barcode Print
-                </a>
-            </li>
-            <li class="nav-item" data-page="reports">
-                <a href="#">
-                    <i class="fas fa-chart-bar"></i>Reports
-                </a>
-            </li>
-            <li class="nav-item" data-page="logs">
-                <a href="#">
-                    <i class="fas fa-history"></i>Activity Logs
-                </a>
-            </li>              
-            <li class="nav-item" data-page="company">
-                <a href="{% url 'company_details' %}">
-                    <i class="fas fa-info-circle"></i>Company Info
-                </a>
-            </li>
-            <li class="nav-item" data-page="settings">
-                <a href="{% url 'settings_page' %}">
-                    <i class="fas fa-cog"></i>Settings
+                    <i class="fas fa-tachometer-alt"></i> Dashboard
                 </a>
             </li>
             {% endif %}
+
+            {% if request.user.is_superuser or perm.allow_billing %}
+            <li class="nav-item">
+                <a href="{% url 'billing' %}">
+                    <i class="fas fa-cash-register"></i> Billing
+                </a>
+            </li>
+            {% endif %}
+
+            {% if request.user.is_superuser or perm.allow_sales_return %}
+            <li class="nav-item">
+                <a href="{% url 'sale_return' %}">
+                    <i class="fas fa-undo-alt"></i> Sales Return
+                </a>
+            </li>
+            {% endif %}
+
+            {% if request.user.is_superuser or perm.allow_products %}
+            <li class="nav-item">
+                <a href="{% url 'products' %}">
+                    <i class="fas fa-boxes"></i> Products
+                </a>
+            </li>
+            {% endif %}
+
+            {% if request.user.is_superuser or perm.allow_items %}
+            <li class="nav-item">
+                <a href="{% url 'items' %}">
+                    <i class="fas fa-box"></i> Items
+                </a>
+            </li>
+            {% endif %}
+
+            {% if request.user.is_superuser or perm.allow_purchase %}
+            <li class="nav-item">
+                <a href="{% url 'purchase' %}">
+                    <i class="fas fa-truck-loading"></i> Purchase
+                </a>
+            </li>
+            {% endif %}
+
+            {% if request.user.is_superuser or perm.allow_inventory %}
+            <li class="nav-item">
+                <a href="{% url 'inventory' %}">
+                    <i class="fas fa-warehouse"></i> Inventory
+                </a>
+            </li>
+            {% endif %}
+
+            {% if request.user.is_superuser or perm.allow_suppliers %}
+            <li class="nav-item">
+                <a href="{% url 'suppliers' %}">
+                    <i class="fas fa-truck"></i> Suppliers
+                </a>
+            </li>
+            {% endif %}
+
+            {% if request.user.is_superuser or perm.allow_config_view %}
+            <li class="nav-item">
+                <a href="{% url 'add' %}">
+                    <i class="fas fa-file-invoice-dollar"></i> Config View
+                </a>
+            </li>
+            {% endif %}
+
+            {% if request.user.is_superuser or perm.allow_barcodes %}
+            <li class="nav-item">
+                <a href="{% url 'label_size_list' %}">
+                    <i class="fas fa-barcode"></i> Barcode Print
+                </a>
+            </li>
+            {% endif %}
+
+            {% if request.user.is_superuser or perm.allow_reports %}
+            <li class="nav-item">
+                <a href="#">
+                    <i class="fas fa-chart-bar"></i> Reports
+                </a>
+            </li>
+            {% endif %}
+
+            {% if request.user.is_superuser or perm.allow_logs %}
+            <li class="nav-item">
+                <a href="#">
+                    <i class="fas fa-history"></i> Activity Logs
+                </a>
+            </li>
+            {% endif %}
+
+            {% if request.user.is_superuser or perm.allow_company %}
+            <li class="nav-item">
+                <a href="{% url 'company_details' %}">
+                    <i class="fas fa-info-circle"></i> Company Info
+                </a>
+            </li>
+            {% endif %}
+
+            {% if request.user.is_superuser or perm.allow_customers %}
+            <li class="nav-item">
+                <a href="{% url 'customers' %}">
+                    <i class="fas fa-users"></i> Customers
+                </a>
+            </li>
+            {% endif %}
+
+            {% if request.user.is_superuser or perm.allow_payments %}
+            <li class="nav-item">
+                <a href="{% url 'payment-list' %}">
+                    <i class="fas fa-money-check-alt"></i> Payments
+                </a>
+            </li>
+            {% endif %}
+
+            {% if request.user.is_superuser or perm.allow_expenses %}
+            <li class="nav-item">
+                <a href="{% url 'expense' %}">
+                    <i class="fas fa-file-invoice-dollar"></i> Expenses
+                </a>
+            </li>
+            {% endif %}
+
+            {% if request.user.is_superuser or perm.allow_settings %}
+            <li class="nav-item">
+                <a href="{% url 'settings_page' %}">
+                    <i class="fas fa-cog"></i> Settings
+                </a>
+            </li>
+            {% endif %}
+
         </ul>
     </aside>
+
+
+
+
 
     <!-- Premium Main Content -->
   <main class="app-content" id="mainContent">
@@ -574,6 +659,31 @@
 {% endif %}
 
 <!-- Scripts -->
+
+
+<script>
+(function () {
+    let id = localStorage.getItem("POS_MACHINE_ID");
+
+    if (!id) {
+        id = "POS-" + crypto.randomUUID();
+        localStorage.setItem("POS_MACHINE_ID", id);
+    }
+
+    // Attach machine-id to every form
+    document.addEventListener("DOMContentLoaded", function () {
+        document.querySelectorAll("form").forEach(form => {
+            let input = document.createElement("input");
+            input.type = "hidden";
+            input.name = "machine_id";
+            input.value = id;
+            form.appendChild(input);
+        });
+    });
+})();
+</script>
+
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function () {

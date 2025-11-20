@@ -597,7 +597,8 @@
                 <th>Username</th>
                 <th>Full Name</th>
                 <th>Role / Groups</th>
-                <th>Date Joined</th>
+                <th>Machine ID</th>
+                <th>Alias Name</th>
                 <th>Last Login</th>
                 <th>Currently Logged In</th>
                 </tr>
@@ -605,18 +606,27 @@
             <tbody>
                 {% for user in user_details %}
                 <tr>
-                <td>{{ user.username }}</td>
-                <td>{{ user.full_name }}</td>
-                <td>{{ user.role }}</td>
-                <td>{{ user.date_joined|date:"Y-m-d H:i" }}</td>
-                <td>{{ user.last_login|date:"Y-m-d H:i" }}</td>
-                <td>
-                    {% if user.currently_logged_in %}
-                    <span class="badge bg-success">Yes</span>
-                    {% else %}
-                    <span class="badge bg-secondary">No</span>
-                    {% endif %}
-                </td>
+                    <td>{{ user.username }}</td>
+                    <td>{{ user.full_name }}</td>
+                    <td>{{ user.role }}</td>
+
+                    <!-- MACHINE ID -->
+                    <td>{{ user.computer_name }}</td>
+
+                    <!-- ALIAS NAME -->
+                    <td>{{ user.computer_alias }}</td>
+
+                    <!-- LAST LOGIN (correct field) -->
+                    <td>{{ user.last_login|date:"Y-m-d H:i" }}</td>
+
+                    <!-- CURRENT STATUS -->
+                    <td>
+                        {% if user.currently_logged_in %}
+                            <span class="badge bg-success">Yes</span>
+                        {% else %}
+                            <span class="badge bg-secondary">No</span>
+                        {% endif %}
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>

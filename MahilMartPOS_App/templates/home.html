@@ -5,11 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Welcome | MahilMart POS</title>
 
-  <!-- Bootstrap & FontAwesome -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"/>
 
-  <style>
+<style>
     html, body {
       height: 100%;
       margin: 0;
@@ -204,41 +203,53 @@
 
   </style>
 </head>
+
 <body>
 
-<header class="app-header">
-  MahilMart POS
-</header>
+<header class="app-header">MahilMart POS</header>
 
 <div class="login-container">
-  <div class="logo-circle">
-    <i class="fas fa-store"></i>
-  </div>
 
-  <div class="welcome-text">
-    <h2 id="greeting">Welcome</h2>
+  <!-- 🔥 Logout or system messages -->
+  {% if messages %}
+  <div class="container mb-3" style="max-width: 420px;">
+      {% for msg in messages %}
+          <div class="alert alert-{{ msg.tags }} alert-dismissible fade show" role="alert">
+              <strong>{{ msg }}</strong>
+              <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+          </div>
+      {% endfor %}
   </div>
+  {% endif %}
+
+  <div class="logo-circle"><i class="fas fa-store"></i></div>
+
+  <h2 id="greeting">Welcome</h2>
 
   <div class="login-form">
-    <h3>Sign In</h3>
+
+    <h3 class="text-center">Sign In</h3>
+
     <form method="post">
       {% csrf_token %}
-      <label for="username">Username</label>
-      <input type="text" name="username" id="username" required value="{{ username|default:'' }}">
 
-      <label for="password">Password</label>
+      <label>Username</label>
+      <input type="text" name="username" required value="{{ username|default:'' }}">
+
+      <label>Password</label>
       <input type="password" name="password" id="password" required>
 
       <div class="checkbox-container">
-        <label><input type="checkbox" onclick="togglePassword()"> Show Password</label>
+        <input type="checkbox" onclick="togglePassword()"> Show Password
       </div>
 
-      <button type="submit">Login</button>
+      <button type="submit" class="btn btn-dark w-100 mt-2">Login</button>
 
       {% if error %}
-      <p class="error">{{ error }}</p>
+        <p class="text-danger text-center mt-2">{{ error }}</p>
       {% endif %}
     </form>
+
   </div>
 </div>
 
@@ -247,22 +258,57 @@
   <div>© 2025 SuperMart Solutions Inc.</div>
 </footer>
 
+<!-- Password Toggle -->
 <script>
-  function togglePassword() {
-    const pwd = document.getElementById("password");
-    pwd.type = pwd.type === "password" ? "text" : "password";
-  }
-
-  // Dynamic greeting
-  const greetingText = document.getElementById("greeting");
-  const hour = new Date().getHours();
-  if (hour < 12) {
-    greetingText.innerText = "Good Morning ☀️";
-  } else if (hour < 15) {
-    greetingText.innerText = "Good Afternoon 🌤️";
-  } else {
-    greetingText.innerText = "Good Evening 🌙";
-  }
+function togglePassword() {
+  const pwd = document.getElementById("password");
+  pwd.type = pwd.type === "password" ? "text" : "password";
+}
 </script>
+
+<!-- Greeting based on time -->
+<script>
+const greetingText = document.getElementById("greeting");
+const hour = new Date().getHours();
+
+if (hour < 12) greetingText.innerText = "Good Morning ☀️";
+else if (hour < 15) greetingText.innerText = "Good Afternoon 🌤️";
+else greetingText.innerText = "Good Evening 🌙";
+</script>
+
+<!-- Machine ID Generator -->
+<script>
+function generateUUID() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 8);
+        return v.toString(16);
+    });
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    let id = localStorage.getItem("POS_DEVICE_ID");
+
+    if (!id) {
+        id = "POS-" + generateUUID();
+        localStorage.setItem("POS_DEVICE_ID", id);
+    }
+
+    document.getElementById("browser_machine_id").value = id;
+});
+</script>
+
+<input type="hidden" id="browser_machine_id" name="browser_machine_id">
+
+<!-- Auto-hide messages -->
+<script>
+setTimeout(() => {
+  document.querySelectorAll('.alert').forEach(alert => {
+      alert.classList.remove('show');
+      setTimeout(() => alert.remove(), 300);
+  });
+}, 4000);
+</script>
+
 </body>
 </html>

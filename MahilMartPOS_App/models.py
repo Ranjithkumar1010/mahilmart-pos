@@ -754,3 +754,122 @@ class BarcodeLabelSize(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.width_mm}x{self.height_mm} mm)"
+    
+
+# -------------------------
+# USER LOGIN ACTIVITY LOG
+# -------------------------
+class LoginLog(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    ip_address = models.CharField(max_length=100, null=True, blank=True)
+    computer_name = models.CharField(max_length=100, null=True, blank=True)
+    login_time = models.DateTimeField(auto_now_add=True)
+    logout_time = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.user.username} - {self.ip_address} - {self.computer_name}"
+
+
+class ComputerAlias(models.Model):
+    computer_name = models.CharField(max_length=200, unique=True)
+    alias_name = models.CharField(max_length=100)
+
+    def __str__(self):
+        return f"{self.alias_name} ({self.computer_name})"
+
+class AdminSettings(models.Model):
+    company_name = models.CharField(max_length=200, default="My Store")
+    phone = models.CharField(max_length=20, blank=True)
+    address = models.TextField(blank=True)
+    invoice_footer = models.TextField(blank=True)
+    theme_color = models.CharField(max_length=50, default="#2e3b4e")  # POS Theme
+
+    def __str__(self):
+        return "Admin Settings"
+
+
+class CashierRestriction(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    allow_discount = models.BooleanField(default=False)
+    allow_price_edit = models.BooleanField(default=False)
+    allow_delete_bill = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f"Restrictions for {self.user.username}"
+    
+class AdminSettings(models.Model):
+    primary_color = models.CharField(max_length=20, default="#2e3b4e")
+    sidebar_color = models.CharField(max_length=20, default="#1f2a38")
+    accent_color = models.CharField(max_length=20, default="#4a6fa5")
+    logo = models.ImageField(upload_to="theme_logo/", null=True, blank=True)
+    mode = models.CharField(max_length=10, default="light") 
+    company_name = models.CharField(max_length=255)
+    phone = models.CharField(max_length=20)
+    address = models.TextField()
+    invoice_footer = models.TextField(blank=True)
+
+
+class CashierPermission(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+
+    allow_dashboard = models.BooleanField(default=False)
+    allow_billing = models.BooleanField(default=False)
+    allow_sales_return = models.BooleanField(default=False)
+    allow_products = models.BooleanField(default=False)
+    allow_items = models.BooleanField(default=False)
+    allow_purchase = models.BooleanField(default=False)
+    allow_inventory = models.BooleanField(default=False)
+    allow_suppliers = models.BooleanField(default=False)
+    allow_barcodes = models.BooleanField(default=False)
+    allow_customers = models.BooleanField(default=False)
+    allow_payments = models.BooleanField(default=False)
+    allow_expenses = models.BooleanField(default=False)
+
+    # Admin-level
+    allow_reports = models.BooleanField(default=False)
+    allow_logs = models.BooleanField(default=False)
+    allow_company = models.BooleanField(default=False)
+    allow_settings = models.BooleanField(default=False)
+    allow_config_view = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f"Cashier Permissions - {self.user.username}"
+
+
+
+class SupervisorPermission(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+
+    allow_dashboard = models.BooleanField(default=False)
+    allow_billing = models.BooleanField(default=False)
+    allow_sales_return = models.BooleanField(default=False)
+    allow_products = models.BooleanField(default=False)
+    allow_items = models.BooleanField(default=False)
+    allow_purchase = models.BooleanField(default=False)
+    allow_inventory = models.BooleanField(default=False)
+    allow_suppliers = models.BooleanField(default=False)
+    allow_barcodes = models.BooleanField(default=False)
+    allow_customers = models.BooleanField(default=False)
+    allow_payments = models.BooleanField(default=False)
+    allow_expenses = models.BooleanField(default=False)
+
+    allow_reports = models.BooleanField(default=False)
+    allow_logs = models.BooleanField(default=False)
+    allow_company = models.BooleanField(default=False)
+    allow_settings = models.BooleanField(default=False)
+    allow_config_view = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f"Supervisor Permissions - {self.user.username}"
+
+
+class MigrationLog(models.Model):
+    mysql_table = models.CharField(max_length=255)
+    postgres_table = models.CharField(max_length=255)
+    migrated_rows = models.IntegerField(default=0)
+    status = models.CharField(max_length=50)  # Success / Failed
+    error_message = models.TextField(blank=True, null=True)
+    migrated_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.mysql_table} → {self.postgres_table}"

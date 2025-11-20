@@ -26,7 +26,7 @@ SECRET_KEY = 'django-insecure-m$j%wqpm)dqy8!erkd_^9hh#4-f29io_)_@zf&+68d1b81fc*)
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['192.168.0.105','127.0.0.1','192.168.0.123']
+ALLOWED_HOSTS = ['192.168.0.105','127.0.0.1','192.168.0.123','192.168.1.132']
 # ALLOWED_HOSTS = ['*']
 
 # Application definition
@@ -63,6 +63,9 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'MahilMartPOS_App.context_processors.base_context',
+                'MahilMartPOS_App.context_processors.user_permissions',
+                # 'MahilMartPOS_App.context_processors.permission_context',
             ],
         },
     },
@@ -72,6 +75,8 @@ WSGI_APPLICATION = 'MahilMartPOS.wsgi.application'
 
 
 
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 
 
@@ -147,3 +152,29 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+ADMINS = [
+    ("POS Admin", "mahiltechlab.ops@gmail.com"),
+]
+
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = "smtp.gmail.com"
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+
+EMAIL_HOST_USER = "mahiltechlab.ops@gmail.com"
+EMAIL_HOST_PASSWORD = "zpibrqflppzfvkli"  # Don't expose publicly
+
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+
+from django.contrib.messages import constants as messages
+
+MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
+
+MESSAGE_TAGS = {
+    messages.ERROR: 'danger',
+    messages.WARNING: 'warning',
+    messages.SUCCESS: 'success',
+    messages.INFO: 'info',
+}

@@ -1,7 +1,7 @@
 from django.contrib import admin
 from .models import Category, Supplier
 from django.contrib import admin
-from .models import Customer
+from .models import Customer,ComputerAlias
 from .models import Billing
 
 @admin.register(Category)
@@ -17,3 +17,5 @@ class SupplierAdmin(admin.ModelAdmin):
 class CustomerAdmin(admin.ModelAdmin):
     list_display = ('name', 'cell', 'email', 'date_joined')
     search_fields = ('name', 'cell', 'email')
+
+admin.site.register(ComputerAlias)
