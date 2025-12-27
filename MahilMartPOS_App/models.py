@@ -18,23 +18,27 @@ class Category(models.Model):
 class Supplier(models.Model):
     supplier_id = models.CharField(max_length=50, unique=True, null=True, blank=True)
     name = models.CharField(max_length=100)
-    contact_person = models.CharField(max_length=100, blank=True, default="Unknown")
-    phone = models.CharField(max_length=15, default="0000000000")
-    email = models.EmailField(blank=True, default="unknown@example.com")
-    address = models.TextField(blank=True, default="N/A")
-    gst_number = models.CharField(max_length=20, blank=True, default="N/A")
-    fssai_number = models.CharField(max_length=20, blank=True, default="N/A")
-    pan_number = models.CharField(max_length=20, blank=True, default="N/A")
-    credit_terms = models.CharField(max_length=50, blank=True, default="N/A")
-    opening_balance = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    bank_name = models.CharField(max_length=100, blank=True, default="N/A")
-    account_number = models.CharField(max_length=50, blank=True, default="N/A")
-    ifsc_code = models.CharField(max_length=20, blank=True, default="N/A")
-    status = models.CharField(max_length=20, default='Active')
-    notes = models.TextField(blank=True, default="")    
+    contact_person = models.CharField(max_length=100, blank=True, default="Unknown", null=True)
+    phone = models.CharField(max_length=15, default="0000000000", null=True)
+    email = models.EmailField(blank=True, default="unknown@example.com", null=True)
+    address = models.TextField(blank=True, default="N/A", null=True)
+    gst_number = models.CharField(max_length=20, blank=True, default="N/A", null=True)
+    fssai_number = models.CharField(max_length=20, blank=True, default="N/A", null=True)
+    pan_number = models.CharField(max_length=20, blank=True, default="N/A", null=True)
+    credit_terms = models.CharField(max_length=50, blank=True, default="N/A", null=True)
+    opening_balance = models.DecimalField(max_digits=10, decimal_places=2, default=0, null=True)
+    bank_name = models.CharField(max_length=100, blank=True, default="N/A", null=True)
+    account_number = models.CharField(max_length=50, blank=True, default="N/A", null=True)
+    ifsc_code = models.CharField(max_length=20, blank=True, default="N/A", null=True)
+    status = models.CharField(max_length=20, default='Active', null=True)
+    notes = models.TextField(blank=True, default="", null=True)
+
+    class Meta:
+        db_table = "MahilMartPOS_App_supplier"  # ⭐ FORCE EXACT PG TABLE NAME
 
     def __str__(self):
-        return self.name        
+        return self.name
+        
     
 class Customer(models.Model):
     name = models.CharField(max_length=100)
@@ -44,8 +48,15 @@ class Customer(models.Model):
     date_joined = models.DateTimeField(auto_now_add=True)
     remarks = models.TextField(blank=True, default="billing_entry")
 
+    # ✅ ADD THIS
+    total_points = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0
+    )
+
     def __str__(self):
-        return f"{self.name} ({self.cell})"     
+        return f"{self.name} ({self.cell})"
 
 class Billing(models.Model):
     customer = models.ForeignKey('Customer', on_delete=models.SET_NULL, null=True, blank=True)
@@ -778,14 +789,21 @@ class ComputerAlias(models.Model):
         return f"{self.alias_name} ({self.computer_name})"
 
 class AdminSettings(models.Model):
-    company_name = models.CharField(max_length=200, default="My Store")
+    company_name = models.CharField(max_length=255)
     phone = models.CharField(max_length=20, blank=True)
     address = models.TextField(blank=True)
     invoice_footer = models.TextField(blank=True)
-    theme_color = models.CharField(max_length=50, default="#2e3b4e")  # POS Theme
+
+    # UI / Theme
+    primary_color = models.CharField(max_length=20, default="#2e3b4e")
+    sidebar_color = models.CharField(max_length=20, default="#1f2a38")
+    accent_color = models.CharField(max_length=20, default="#4a6fa5")
+    logo = models.ImageField(upload_to="theme_logo/", null=True, blank=True)
+    mode = models.CharField(max_length=10, default="light")
 
     def __str__(self):
         return "Admin Settings"
+
 
 
 class CashierRestriction(models.Model):
@@ -797,16 +815,7 @@ class CashierRestriction(models.Model):
     def __str__(self):
         return f"Restrictions for {self.user.username}"
     
-class AdminSettings(models.Model):
-    primary_color = models.CharField(max_length=20, default="#2e3b4e")
-    sidebar_color = models.CharField(max_length=20, default="#1f2a38")
-    accent_color = models.CharField(max_length=20, default="#4a6fa5")
-    logo = models.ImageField(upload_to="theme_logo/", null=True, blank=True)
-    mode = models.CharField(max_length=10, default="light") 
-    company_name = models.CharField(max_length=255)
-    phone = models.CharField(max_length=20)
-    address = models.TextField()
-    invoice_footer = models.TextField(blank=True)
+
 
 
 class CashierPermission(models.Model):
@@ -863,13 +872,60 @@ class SupervisorPermission(models.Model):
         return f"Supervisor Permissions - {self.user.username}"
 
 
+from django.db import models
+
 class MigrationLog(models.Model):
-    mysql_table = models.CharField(max_length=255)
+    mssql_table = models.CharField(max_length=255)
     postgres_table = models.CharField(max_length=255)
     migrated_rows = models.IntegerField(default=0)
-    status = models.CharField(max_length=50)  # Success / Failed
+    status = models.CharField(max_length=20)
     error_message = models.TextField(blank=True, null=True)
+
+    # store column mapping freely (no unique constraints)
+    column_mapping = models.JSONField(null=True, blank=True)
+
     migrated_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        # IMPORTANT: remove ANY unique_together
+        constraints = []      # <----- REMOVE UNIQUE constraint completely
+        indexes = []          # <----- optional, cleaner future migrations
+
     def __str__(self):
-        return f"{self.mysql_table} → {self.postgres_table}"
+        return f"{self.mssql_table} -> {self.postgres_table}"
+
+
+
+from django.db import models
+from django.contrib.auth.models import User
+
+
+class ActivityLog(models.Model):
+    ACTION_CHOICES = [
+        ("LOGIN", "Login"),
+        ("LOGOUT", "Logout"),
+        ("CREATE", "Create"),
+        ("UPDATE", "Update"),
+        ("DELETE", "Delete"),
+        ("VIEW", "View"),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    username = models.CharField(max_length=150)
+    role = models.CharField(max_length=100, blank=True)
+
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    module = models.CharField(max_length=100)
+    description = models.TextField()
+
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    device_name = models.CharField(max_length=255, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.username} - {self.action} - {self.module}"
+

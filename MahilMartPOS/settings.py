@@ -26,7 +26,7 @@ SECRET_KEY = 'django-insecure-m$j%wqpm)dqy8!erkd_^9hh#4-f29io_)_@zf&+68d1b81fc*)
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['192.168.0.105','127.0.0.1','192.168.0.123','192.168.1.132']
+ALLOWED_HOSTS = ['192.168.0.105','127.0.0.1','192.168.0.123','192.168.1.132','192.168.0.128']
 # ALLOWED_HOSTS = ['*']
 
 # Application definition
@@ -38,7 +38,10 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'MahilMartPOS_App',
+    # 'MahilMartPOS_App',
+    'django_extensions',
+    'MahilMartPOS_App.apps.MahilmartposAppConfig',
+
 ]
 
 MIDDLEWARE = [
@@ -178,3 +181,14 @@ MESSAGE_TAGS = {
     messages.SUCCESS: 'success',
     messages.INFO: 'info',
 }
+
+
+MSSQL_CONN_STR = (
+    "DRIVER={ODBC Driver 17 for SQL Server};"
+    "SERVER=192.168.0.110,1433;"
+    "DATABASE=MahilMart-Analytics;"
+    "UID=mahilmartuser;"
+    "PWD=Admin@123;"
+    "TrustServerCertificate=yes;"
+)
+

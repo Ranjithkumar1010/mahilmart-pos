@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Create New User{% endblock %}
 {% block content %}
+
 <style>
 :root {
   --primary: #2e3b4e;
@@ -62,15 +63,42 @@
   border-radius:12px;
 }
 .group-toggle { padding:7px 0; border-bottom:1px solid #eee; }
-</style>
 
+/* STATUS SWITCH */
+.switch-wrapper {
+    position: relative;
+    display: inline-block;
+    width: 42px;
+    height: 22px;
+}
+.switch-wrapper input { opacity: 0; width: 0; height: 0; }
+.switch-slider {
+    position: absolute;
+    cursor: pointer;
+    background-color: #ccc;
+    border-radius: 22px;
+    top:0; left:0; right:0; bottom:0;
+    transition: .3s;
+}
+.switch-slider:before {
+    content:"";
+    position:absolute;
+    width:18px; height:18px;
+    background:white;
+    border-radius:50%;
+    left:2px; bottom:2px;
+    transition:.3s;
+}
+input:checked + .switch-slider { background:#2e3b4e; }
+input:checked + .switch-slider:before { transform:translateX(20px); }
+</style>
 
 
 
 <div class="form-box">
   <h2>Create New User</h2>
 
-  <form method="POST" onsubmit="return validateForm()">
+  <form method="POST" id="userForm">
     {% csrf_token %}
 
     <label>Username</label>
@@ -132,23 +160,7 @@
 
 
 <script>
-/* VALIDATION BEFORE SUBMIT */
-function validateForm() {
-    let role = document.getElementById("roleSelect").value;
-    let group = document.getElementById("groupSelect").value;
-
-    if (!role) {
-        alert("Please select a Role");
-        return false;
-    }
-    if (!group) {
-        alert("Please select a Group");
-        return false;
-    }
-    return true;
-}
-
-/* MODAL OPEN/CLOSE */
+/* MODAL CONTROL */
 function openGroupModal() {
     document.getElementById("groupModal").style.display = "flex";
     loadGroups();
@@ -157,7 +169,12 @@ function closeGroupModal() {
     document.getElementById("groupModal").style.display = "none";
 }
 
-/* LOAD GROUP LIST */
+/* GET CSRF TOKEN (Correct way for JS) */
+function getCSRFToken() {
+    return document.querySelector("[name=csrfmiddlewaretoken]").value;
+}
+
+/* LOAD EXISTING GROUPS INTO MODAL */
 function loadGroups() {
     fetch("/ajax/get-groups/")
     .then(res => res.json())
@@ -169,32 +186,47 @@ function loadGroups() {
 /* CREATE NEW GROUP */
 function saveGroup() {
     const name = document.getElementById("newGroupName").value.trim();
-    if (!name) { alert("Enter group name"); return; }
+    if (!name) {
+        alert("Enter group name");
+        return;
+    }
 
     fetch("/ajax/create-group/", {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
-            "X-CSRFToken": "{{ csrf_token }}"
+            "X-CSRFToken": getCSRFToken()
         },
         body: JSON.stringify({ group_name: name })
     })
     .then(res => res.json())
     .then(data => {
         if (data.success) {
-
-            // Add to dropdown instantly
-            const sel = document.getElementById("groupSelect");
+            // Add to dropdown
+            const select = document.getElementById("groupSelect");
             const opt = document.createElement("option");
             opt.value = data.id;
             opt.textContent = data.name;
-            sel.appendChild(opt);
+            select.appendChild(opt);
+            select.value = data.id;
 
-            loadGroups();
+            loadGroups();  // refresh modal list
             document.getElementById("newGroupName").value = "";
         } else {
             alert(data.message);
         }
+    });
+}
+
+/* TOGGLE GROUP STATUS */
+function toggleGroup(id) {
+    fetch("/ajax/toggle-group/", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "X-CSRFToken": getCSRFToken()
+        },
+        body: JSON.stringify({ id: id })
     });
 }
 </script>

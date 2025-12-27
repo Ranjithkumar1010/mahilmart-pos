@@ -1,9 +1,8 @@
 {% extends "base.html" %}
 {% block title %}User Management{% endblock %}
-
 {% block content %}
-<style>
 
+<style>
 /* ------------------- COLOR SYSTEM ------------------- */
 :root {
     --primary-dark: #1f2a38;
@@ -46,7 +45,8 @@
 
 /* Buttons */
 .controls-bar input[type="submit"],
-.controls-bar a.btn {
+.controls-bar a.btn,
+.controls-bar button.reset-btn {
   padding: 10px 14px;
   background: var(--primary);
   color: white;
@@ -60,7 +60,8 @@
 }
 
 .controls-bar input[type="submit"]:hover,
-.controls-bar a.btn:hover {
+.controls-bar a.btn:hover,
+.controls-bar button.reset-btn:hover {
   background: var(--primary-dark);
 }
 
@@ -89,12 +90,12 @@
 .user-table-container {
   width: 92%;
   margin: 20px auto;
-  overflow-x: auto; /* Mobile scroll */
+  overflow-x: auto;
 }
 
 .user-table {
   width: 100%;
-  min-width: 800px;  
+  min-width: 800px;
   border-collapse: collapse;
   background: var(--white);
   border-radius: 10px;
@@ -114,17 +115,6 @@ th {
 
 tr:hover {
   background-color: var(--table-hover);
-}
-
-/* ROW COLORS */
-.staff-row {
-  background: #f1fbff;
-  font-weight: 600;
-}
-
-.superuser-row {
-  background: #e4fcff;
-  font-weight: bold;
 }
 
 /* ------------------- ACTION BUTTONS ------------------- */
@@ -174,33 +164,39 @@ tr:hover {
   background: var(--primary);
   color: white;
 }
-
-/* ------------------- SORT LINKS ------------------- */
-th a {
-  color: white;
-  text-decoration: none;
-}
 </style>
+
+
 
 <!-- ---------------- CONTROLS BAR ---------------- -->
 <div class="controls-bar">
-  <form method="get" action="{% url 'settings_page' %}">
-    <input id="liveSearchInput" type="text" name="q" placeholder="Search username or email..." value="{{ query|default:'' }}">
+
+  <form method="get" action="{% url 'user' %}">
     
+    <input id="liveSearchInput" type="text" name="q" placeholder="Search username or email..." value="{{ query|default:'' }}">
+
     <select name="role" id="roleFilter">
-      <option value="">All Roles</option>
-      <option value="admin" {% if role == 'admin' %}selected{% endif %}>Store Admin</option>
-      <option value="staff" {% if role == 'staff' %}selected{% endif %}>Supv.</option>
-      <option value="normal" {% if role == 'normal' %}selected{% endif %}>Cashier</option>
+        <option value="">All Roles</option>
+        {% for g in groups %}
+        <option value="{{ g.name }}" {% if role == g.name %}selected{% endif %}>
+            {{ g.name }}
+        </option>
+        {% endfor %}
     </select>
 
-    <input type="submit" value="🔍 Search">  <!-- fallback -->
+    <input type="submit" value="🔍 Search">
+
+    <!-- <button type="button" class="reset-btn" onclick="resetFilters()">🔄 Reset</button> -->
+
   </form>
 
   <div class="buttons">
     <a href="{% url 'create_user' %}" class="btn">➕ Create New User</a>
   </div>
+
 </div>
+
+
 
 <!-- ---------------- USER TABLE ---------------- -->
 <div class="user-table-container">
@@ -224,6 +220,8 @@ th a {
 </table>
 </div>
 
+
+
 <!-- ---------------- PAGINATION ---------------- -->
 <div class="pagination">
   {% if page_obj.has_previous %}
@@ -237,9 +235,12 @@ th a {
   {% endif %}
 </div>
 
+
+
 <!-- ---------------- LIVE SEARCH SCRIPT ---------------- -->
 <script>
 document.addEventListener("DOMContentLoaded", () => {
+
     const searchBox = document.getElementById("liveSearchInput");
     const tableBody = document.getElementById("userTableBody");
     const roleFilter = document.getElementById("roleFilter");
@@ -250,9 +251,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const query = searchBox.value.trim();
         const role = roleFilter.value;
 
-        if (query.length < 3 && query.length !== 0) {
-            return;  // Wait until 3 letters
-        }
+        if (query.length < 3 && query.length !== 0) return;
 
         fetch(`/ajax/search-users/?q=${query}&role=${role}`)
             .then(res => res.json())
@@ -268,6 +267,28 @@ document.addEventListener("DOMContentLoaded", () => {
 
     roleFilter.addEventListener("change", triggerSearch);
 });
+
+
+
+/* ---------------- RESET FILTERS ---------------- */
+function resetFilters() {
+    const searchBox = document.getElementById("liveSearchInput");
+    const roleFilter = document.getElementById("roleFilter");
+    const tableBody = document.getElementById("userTableBody");
+
+    searchBox.value = "";
+    roleFilter.value = "";
+
+    fetch(`/ajax/search-users/?q=&role=`)
+        .then(res => res.json())
+        .then(data => {
+            tableBody.innerHTML = data.html;
+        });
+
+    window.history.pushState({}, "", "{% url 'user' %}");
+}
 </script>
+
+
 
 {% endblock %}

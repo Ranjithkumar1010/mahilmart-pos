@@ -70,7 +70,7 @@ from django.shortcuts import render
 from django.utils import timezone
 from django.core.mail import EmailMultiAlternatives
 from django.conf import settings
-from .utils import get_computer_name_from_ip
+
 from django.http import JsonResponse
 from django.template.loader import render_to_string
 from barcode import Code128
@@ -283,7 +283,8 @@ from django.shortcuts import render, redirect
 from django.contrib.auth import authenticate, login
 from django.contrib.sessions.models import Session
 from MahilMartPOS_App.models import LoginLog, ComputerAlias
-from .utils import get_client_ip, get_machine_name_from_ip
+from .utils.ip_utils import get_client_ip, get_machine_name_from_ip
+
 
 
 def logout_previous_sessions(user):
@@ -305,7 +306,9 @@ from django.contrib.sessions.models import Session
 from django.utils import timezone
 
 from MahilMartPOS_App.models import LoginLog, ComputerAlias
-from .utils import get_client_ip, get_machine_name_from_ip
+
+from .utils.ip_utils import get_client_ip, get_machine_name_from_ip
+
 
 
 def login_view(request):
@@ -445,7 +448,6 @@ def create_user(request):
 
 
 
-
 def ajax_get_groups(request):
     groups = Group.objects.all().order_by("name")
     html = render_to_string("partials/group_list.html", {"groups": groups})
@@ -453,22 +455,36 @@ def ajax_get_groups(request):
 
 
 def ajax_create_group(request):
-    data = json.loads(request.body)
-    name = data.get("group_name").strip()
+    """Create a new group through modal."""
+    try:
+        data = json.loads(request.body)
+        name = data.get("group_name", "").strip()
 
-    if Group.objects.filter(name=name).exists():
-        return JsonResponse({"success": False, "message": "Group already exists!"})
+        if not name:
+            return JsonResponse({"success": False, "message": "Group name cannot be empty!"})
 
-    Group.objects.create(name=name)
-    return JsonResponse({"success": True})
+        if Group.objects.filter(name=name).exists():
+            return JsonResponse({"success": False, "message": "Group already exists!"})
+
+        group = Group.objects.create(name=name)
+
+        return JsonResponse({
+            "success": True,
+            "id": group.id,
+            "name": group.name
+        })
+
+    except Exception as e:
+        return JsonResponse({"success": False, "message": str(e)})
 
 
 def ajax_toggle_group(request):
+    """(Optional) Toggle ON/OFF state if needed."""
     data = json.loads(request.body)
     group_id = data.get("id")
 
-    # you can implement any ON/OFF logic here
     return JsonResponse({"success": True})
+
 
 
 
@@ -541,33 +557,40 @@ def settings_page(request):
 # ======================
 # USER LIST (user_settings.html)
 # ======================
+from django.contrib.auth.models import Group
+
 @allow_settings
 def update_admin_settings(request):
     query = request.GET.get('q')
     sort_by = request.GET.get('sort', 'id')
-    role = request.GET.get('role')
+    role = request.GET.get('role')  # this will be group name
 
     users = User.objects.all()
 
+    # 🔍 Search
     if query:
         users = users.filter(Q(username__icontains=query) | Q(email__icontains=query))
 
-    if role == 'admin':
-        users = users.filter(is_superuser=True)
-    elif role == 'staff':
-        users = users.filter(is_staff=True)
+    # 🔥 Filter By Group (role)
+    if role:
+        users = users.filter(groups__name=role)
 
-    if sort_by in ['id', 'username', 'email', 'is_staff', 'is_superuser']:
+    # 🔽 Sorting
+    if sort_by in ['id', 'username', 'email']:
         users = users.order_by(sort_by)
 
     paginator = Paginator(users, 10)
     page_obj = paginator.get_page(request.GET.get('page'))
 
+    # fetch group list for dropdown
+    groups = Group.objects.all()
+
     return render(request, 'user_settings.html', {
         'page_obj': page_obj,
         'query': query,
         'sort_by': sort_by,
-        'role': role
+        'role': role,
+        'groups': groups
     })
 
 
@@ -1358,7 +1381,6 @@ def sales_chart_data(request):
 
 
 
-
 @allow_billing
 @login_required
 def create_invoice_view(request):
@@ -1542,9 +1564,10 @@ def create_invoice_view(request):
                     )
 
                 # ---- update points ----
-                billing.points = total_points + points_earned_total
-                billing.points_earned = points_earned_total
+                billing.points = float(request.POST.get('points') or 0)
+                billing.points_earned = float(request.POST.get('total_earned') or 0)
                 billing.save()
+
 
                 messages.success(request, "✅ Billing submitted successfully!")
                 return redirect('billing')
@@ -1583,6 +1606,8 @@ def create_invoice_view(request):
     raw_computer_name = last_log.computer_name if last_log else ""
     alias_obj = ComputerAlias.objects.filter(computer_name=raw_computer_name).first()
     current_counter_name = alias_obj.alias_name if alias_obj else raw_computer_name
+
+    print("company:", company)
 
     return render(request, 'billing.html', {
         'today_date': today_date,
@@ -3194,11 +3219,14 @@ def sale_return_items_api(request):
             'return_amount': float(item.return_amount),
         })
     return JsonResponse({'items': items})
-@allow_products   
+
+
+@allow_products
 def products_view(request):
     name_query = request.GET.get('name_query', '').strip()
     code_query = request.GET.get('code_query', '').strip()
     selected_group = request.GET.get('group', '').strip()
+    page_number = int(request.GET.get("page", 1))
 
     base_queryset = Item.objects.all()
 
@@ -3222,22 +3250,39 @@ def products_view(request):
         .values_list('min_id', flat=True)
     )
 
-    items = Item.objects.filter(id__in=unique_ids)
+    items_queryset = Item.objects.filter(id__in=unique_ids).order_by('id')
 
-    # Count products
-    product_count = items.count()
+    product_count = items_queryset.count()
 
-    # Distinct groups for dropdown
+    # Pagination: 50 per page
+    paginator = Paginator(items_queryset, 50)
+    page_obj = paginator.get_page(page_number)
+
+    start_index = (page_obj.number - 1) * paginator.per_page
+
+    # For AJAX infinite load
+    if request.headers.get("x-requested-with") == "XMLHttpRequest":
+        html = render_to_string(
+            "partials/product_rows.html",
+            {"items": page_obj, "start_index": start_index},
+            request=request
+        )
+        return JsonResponse({"html": html, "has_next": page_obj.has_next()})
+
     groups = Item.objects.values_list('group', flat=True).distinct().order_by('group')
 
     return render(request, 'products.html', {
-        'items': items,
-        'name_query': name_query,
-        'code_query': code_query,
-        'groups': groups,
-        'selected_group': selected_group,
-        'product_count': product_count,
+        "items": page_obj,
+        "name_query": name_query,
+        "code_query": code_query,
+        "groups": groups,
+        "selected_group": selected_group,
+        "product_count": product_count,
+        "has_next": page_obj.has_next(),
+        "start_index": start_index,
     })
+
+
 
 
 
@@ -4301,29 +4346,61 @@ def fetch_item_info(request):
         })
     
     return JsonResponse({'error': 'Item not found'}, status=404)
+# keep your decorator
+# views.py
+from django.shortcuts import render
+from django.db.models import Q
+from django.core.paginator import Paginator
+from django.http import JsonResponse
+from django.template.loader import render_to_string
+
+# Adjust imports to your project structure
+from .models import Inventory
+from .decorators import allow_inventory
 
 @allow_inventory
 def inventory_view(request):
     query = request.GET.get('q', '').strip()
+    page_number = int(request.GET.get('page', 1))
 
-    # Exclude any unit that contains the word "bulk"
-    items = Inventory.objects.select_related('item') \
+    # Base queryset: exclude units containing 'bulk', only positive quantity, newest first
+    qs = Inventory.objects.select_related('item') \
         .exclude(item__unit__icontains='bulk') \
         .filter(quantity__gt=0) \
         .order_by('-id')
 
     if query:
-        items = items.filter(
+        qs = qs.filter(
             Q(item__item_name__icontains=query) |
             Q(item__code__icontains=query) |
             Q(item__barcode__icontains=query) |
             Q(item__brand__icontains=query) |
-            Q(item__unit__icontains=query)           
+            Q(item__unit__icontains=query)
         )
 
-    return render(request, 'inventory.html', {
-        'items': items
+    paginator = Paginator(qs, 50)  # 50 products per page
+    page_obj = paginator.get_page(page_number)
+
+    # start_index for continuous S no (0-based offset)
+    start_index = (page_obj.number - 1) * paginator.per_page
+
+    # If AJAX (infinite scroll) request -> return rendered rows and has_next
+    if request.headers.get("x-requested-with") == "XMLHttpRequest":
+        html = render_to_string(
+            "partials/inventory_rows.html",
+            {"items": page_obj, "start_index": start_index},
+            request=request
+        )
+        return JsonResponse({"html": html, "has_next": page_obj.has_next()})
+
+    # Normal render
+    return render(request, "inventory.html", {
+        "items": page_obj,
+        "has_next": page_obj.has_next(),
+        "start_index": start_index,
+        "query": query
     })
+
 
 @allow_inventory
 def split_stock_page(request):
@@ -4566,14 +4643,26 @@ def edit_customer(request, id):
 
     return render(request, "edit_customer.html", {"customer": customer})
 
+from django.shortcuts import render
+from .models import PurchaseItem, Supplier
+# import your decorator; keep as-is if defined elsewhere
+try:
+    from .decorators import allow_purchase
+except Exception:
+    def allow_purchase(fn): return fn
+
 @allow_purchase
 def purchase_items_view(request):
-    
-    # Start with all PurchaseItems and select related purchase & supplier
+    """
+    Render purchase items list with newest purchases shown first.
+    Filters by supplier and purchase.created_at date range (if provided).
+    """
+
+    # Base queryset with related joins for efficiency
     items = PurchaseItem.objects.select_related(
         "purchase",
         "purchase__supplier"
-    ).all().order_by('purchase__id')
+    ).all()
 
     # Fetch suppliers for the dropdown
     suppliers = Supplier.objects.all()
@@ -4581,44 +4670,129 @@ def purchase_items_view(request):
     # Get filter parameters from GET
     supplier_id = request.GET.get("supplier")
     start_date = request.GET.get("start_date")
-    end_date = request.GET.get("end_date") 
+    end_date = request.GET.get("end_date")
 
     # Apply supplier filter
     if supplier_id:
         items = items.filter(purchase__supplier_id=supplier_id)
 
-    # Apply date range filter using 'created_at'
+    # Apply date range filter using purchase.created_at (date part)
     if start_date:
         items = items.filter(purchase__created_at__date__gte=start_date)
     if end_date:
-        items = items.filter(purchase__created_at__date__lte=end_date) 
+        items = items.filter(purchase__created_at__date__lte=end_date)
+
+    # Order newest purchases first:
+    # Primary: purchase.created_at (descending). Fallback: purchase.id (descending).
+    items = items.order_by('-purchase__created_at', '-purchase__id')
 
     context = {
         "items": items,
         "suppliers": suppliers,
         "selected_supplier": supplier_id,
         "start_date": start_date,
-        "end_date": end_date,         
+        "end_date": end_date,
     }
 
     return render(request, "purchase_items.html", context)
+
+# views.py
+import base64
+from django.http import JsonResponse, HttpResponseBadRequest
+from django.views.decorators.http import require_GET
+from .models import PurchasePayment  # adjust import path if needed
+
+# decorator you mentioned earlier
+# from .decorators import allow_purchase  # if you have one; otherwise remove the decorator
+# use allow_purchase if required
+try:
+    from .decorators import allow_purchase
+except Exception:
+    def allow_purchase(fn):
+        return fn
+
+
+def _serialize_payments_for_invoice(invoice_no):
+    """
+    Helper: returns list of dicts for payments for purchase invoice_no.
+    Adjust field names to match your models.
+    """
+    payments_qs = PurchasePayment.objects.filter(purchase__invoice_no=invoice_no).order_by('payment_date', 'id')
+    data = []
+    for p in payments_qs:
+        purchase = getattr(p, 'purchase', None)
+        supplier = getattr(purchase, 'supplier', None) if purchase else None
+
+        # adapt fields if your model uses different names
+        payment_date = getattr(p, 'payment_date', None)
+        payment_date_str = payment_date.strftime("%Y-%m-%d") if getattr(payment_date, 'strftime', None) else (str(payment_date) if payment_date else "")
+
+        data.append({
+            "payment_amount": str(getattr(p, 'payment_amount', getattr(p, 'amount', None)) or ""),
+            "payment_mode": getattr(p, 'payment_mode', getattr(p, 'mode', "")) or "",
+            "payment_reference": getattr(p, 'payment_reference', getattr(p, 'reference', "")) or "",
+            "purchase_id": getattr(purchase, 'id', None),
+            "payment_date": payment_date_str,
+            "supplier_id": getattr(supplier, 'id', None) or getattr(supplier, 'supplier_id', None),
+            "balance_amount": str(getattr(p, 'balance_amount', None) or ""),
+            "total_amount": str(getattr(purchase, 'total_amount', None) or ""),
+        })
+    return data
+
+
+@require_GET
 @allow_purchase
 def purchase_payments_api(request, invoice_no):
-    payments = PurchasePayment.objects.filter(invoice_no=invoice_no).order_by('payment_date')
-    data = [
-        {
-            "payment_amount": str(p.payment_amount),
-            "payment_mode": p.payment_mode,
-            "payment_reference": p.payment_reference,
-            "purchase_id": p.purchase.id,
-            "payment_date": p.payment_date.strftime("%Y-%m-%d"),
-            "supplier_id": p.supplier.supplier_id,
-            "balance_amount": str(p.balance_amount),
-            "total_amount": str(p.total_amount),
-        }
-        for p in payments
-    ]
-    return JsonResponse({"payments": data})
+    """
+    A: Direct path view. URL: /api/purchase-payments/<invoice_no>/
+    IMPORTANT: This will NOT match when invoice_no contains slashes (/).
+    """
+    if not invoice_no:
+        return JsonResponse({"payments": []})
+
+    payments_data = _serialize_payments_for_invoice(invoice_no)
+    return JsonResponse({"payments": payments_data})
+
+
+@require_GET
+@allow_purchase
+def purchase_payments_api_b64(request, invoice_b64):
+    """
+    B: Path view that accepts base64-encoded invoice.
+    URL: /api/purchase-payments/b64/<invoice_b64>/
+    The client must base64-encode the invoice (URL-safe).
+    """
+    if not invoice_b64:
+        return JsonResponse({"payments": []})
+
+    try:
+        # invoice_b64 is normal base64 (not URLsafe); decode robustly
+        # handle both urlsafe and normal base64
+        try:
+            decoded_bytes = base64.urlsafe_b64decode(invoice_b64 + "===")
+        except Exception:
+            decoded_bytes = base64.b64decode(invoice_b64 + "===")
+        invoice_no = decoded_bytes.decode('utf-8')
+    except Exception as exc:
+        return HttpResponseBadRequest(f"Invalid base64 invoice: {exc}")
+
+    payments_data = _serialize_payments_for_invoice(invoice_no)
+    return JsonResponse({"payments": payments_data})
+
+
+@require_GET
+@allow_purchase
+def purchase_payments_api_query(request):
+    """
+    C: Query param view. URL: /api/purchase-payments/?invoice=...
+    This is the simplest and safest approach when invoice contains special characters.
+    """
+    invoice_no = request.GET.get("invoice")
+    if not invoice_no:
+        return JsonResponse({"payments": []})
+
+    payments_data = _serialize_payments_for_invoice(invoice_no)
+    return JsonResponse({"payments": payments_data})
 
 @allow_expenses
 def create_expense(request):
@@ -4633,59 +4807,74 @@ def create_expense(request):
         form = ExpenseForm()
     return render(request, 'expense.html', {'form': form})
 
+from django.shortcuts import render
+from django.utils.timezone import localtime
+from collections import defaultdict
+from django.db.models import Sum
+
+from .models import Expense
+from .decorators import allow_expenses
+
+
 @allow_expenses
 def expense_list(request):
     from_date = request.GET.get('from_date')
     to_date = request.GET.get('to_date')
-    category = request.GET.get('category')
+    category = request.GET.get('category', 'all')
 
-    all_expenses = Expense.objects.all()
+    expenses = Expense.objects.all()
 
+    # ---------------------------
+    # Date Filters
+    # ---------------------------
     if from_date:
-        all_expenses = all_expenses.filter(datetime__date__gte=from_date)
+        expenses = expenses.filter(datetime__date__gte=from_date)
+
     if to_date:
-        all_expenses = all_expenses.filter(datetime__date__lte=to_date)
+        expenses = expenses.filter(datetime__date__lte=to_date)
 
+    # ---------------------------
+    # Category Filter
+    # ---------------------------
     if category and category != 'all':
-        all_expenses = all_expenses.filter(category=category)
+        expenses = expenses.filter(category=category)
 
-    all_expenses = all_expenses.order_by('-datetime')
+    expenses = expenses.order_by('-datetime')
 
+    # ---------------------------
+    # Group by Date
+    # ---------------------------
     expenses_by_date = defaultdict(list)
-    for expense in all_expenses:
-        local_datetime = localtime(expense.datetime)
-        date_key = local_datetime.strftime('%Y-%m-%d')
-        expenses_by_date[date_key].append({
-            'category': expense.get_category_display(),
-            'detail': expense.category_detail,
-            'datetime': local_datetime,
-            'paid_to': expense.paid_to,
-            'payment_mode': expense.paymentmode,
-            'amount': expense.category_detail  
-        })
+    for expense in expenses:
+        local_dt = localtime(expense.datetime)
+        date_key = local_dt.date()
+        expenses_by_date[date_key].append(expense)
 
-    category_totals = defaultdict(float)
-    if from_date or to_date:
-        filtered_expenses = Expense.objects.all()
-        if from_date:
-            filtered_expenses = filtered_expenses.filter(datetime__date__gte=from_date)
-        if to_date:
-            filtered_expenses = filtered_expenses.filter(datetime__date__lte=to_date)
+    # ---------------------------
+    # Category Totals
+    # ---------------------------
+    category_totals = (
+        expenses
+        .values('category')
+        .annotate(total=Sum('amount'))
+        .order_by('category')
+    )
 
-        for exp in filtered_expenses:
-            try:
-                category_totals[exp.get_category_display()] += float(exp.category_detail)
-            except (ValueError, TypeError):
-                pass 
+    category_totals_dict = {
+        dict(Expense.CATEGORY_CHOICES)[item['category']]: item['total']
+        for item in category_totals
+    }
 
-    return render(request, 'expense_list.html', {
+    context = {
         'expenses_by_date': dict(expenses_by_date),
         'from_date': from_date,
         'to_date': to_date,
         'selected_category': category,
-        'category_totals': dict(category_totals),
-        'show_totals': bool(from_date or to_date),
-    })
+        'category_totals': category_totals_dict,
+        'show_totals': bool(from_date or to_date or category != 'all'),
+    }
+
+    return render(request, 'expense_list.html', context)
 
 def backup_company_details(instance, backup_dir):
     if not os.path.exists(backup_dir):
@@ -4701,149 +4890,641 @@ def backup_company_details(instance, backup_dir):
     print(f"CompanyDetails backup saved at: {backup_file}")
 
 
-import MySQLdb
+###############################################
+#  CLEAN & SAFE MIGRATION ENGINE (Option A2)
+#  Only mapped columns are inserted into PG.
+#  PG NOT NULL w/out default → STOP migration.
+###############################################
+
+import json
+import uuid
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+import pyodbc
+import psycopg2
+from psycopg2 import errors
+
 from django.shortcuts import render, redirect
 from django.contrib import messages
-from django.db import connection
+from django.http import JsonResponse, HttpResponseBadRequest
+from django.core.paginator import Paginator
+from django.core.cache import cache
+from django.conf import settings
+from django.core.mail import send_mail
+
 from .models import MigrationLog
-import psycopg2
-from psycopg2 import sql
-from django.http import JsonResponse
 
 
-def db_migration_tool(request):
-    # Load MySQL tables for dropdown
-    try:
-        mysql_conn = MySQLdb.connect(
-            host="localhost",
-            user="root",
-            passwd="YOUR_MYSQL_PASSWORD",
-            db="YOUR_MYSQL_DB"
+# ---------------------------------------
+# DB SETTINGS
+# ---------------------------------------
+MSSQL_CONN_STR = (
+    "Driver={ODBC Driver 17 for SQL Server};"
+    "Server=192.168.0.113,1433;"
+    "Database=MahilMart-Analytics;"
+    "Uid=mahilmartuser;"
+    "Pwd=Admin@123;"
+    "Trusted_Connection=no;"
+    "TrustServerCertificate=yes;"
+)
+
+POSTGRES_PARAMS = {
+    "host": "localhost",
+    "user": "postgres",
+    "password": "Praveen",
+    "dbname": "mmpos",
+}
+
+executor = ThreadPoolExecutor(max_workers=4)
+job_lock = threading.Lock()
+migration_jobs = {}
+
+
+# =====================================================
+# UTIL
+# =====================================================
+def clean_value(value):
+    """Normalize MSSQL values for PostgreSQL."""
+    if value in ["", None, " "]:
+        return None
+    if isinstance(value, str) and value.strip() == "":
+        return None
+    return value
+
+
+def apply_mapping(row_dict, mapping):
+    """Apply column mapping MSSQL -> PG."""
+    result = {}
+    for mssql_col, pg_col in mapping.items():
+        result[pg_col] = clean_value(row_dict.get(mssql_col))
+    return result
+
+
+def get_pg_required_columns(pg_cur, table_name):
+    """
+    Returns a list of NOT NULL PG columns that do NOT have default values
+    and are NOT the auto 'id' column.
+
+    These MUST be mapped, otherwise migration should stop.
+    """
+    pg_cur.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = %s
+          AND table_schema = 'public'
+          AND is_nullable = 'NO'
+          AND column_default IS NULL
+        """,
+        [table_name],
+    )
+    required = []
+    for (col,) in pg_cur.fetchall():
+        # 👉 DO NOT require the 'id' column (identity/autoincrement)
+        if col.lower() == "id":
+            continue
+        required.append(col)
+    return required
+
+
+# =====================================================
+# MAIN MIGRATION FUNCTION (Option A2, fixed for id)
+# =====================================================
+def run_table_migration(mssql_table, postgres_table=None):
+    """
+    Generic MSSQL → PostgreSQL table copy.
+
+    - Only mapped columns are inserted.
+    - Validates PG required fields BEFORE inserting.
+    - If a required PG column is NOT mapped → STOP (Option A2).
+    - 'id' is NOT required to be mapped (PG generates it).
+    """
+
+    # Handle Supplier special-case naming if no explicit pg table passed
+    if not postgres_table:
+        if mssql_table.lower() == "supplier":
+            postgres_table = "MahilMartPOS_App_supplier"
+        else:
+            postgres_table = mssql_table
+
+    print(f"\n🚀 MIGRATE: MSSQL '{mssql_table}' → PG '{postgres_table}'")
+
+    # Load saved mapping from MigrationLog
+    mapping_logs = (
+        MigrationLog.objects.filter(
+            mssql_table=mssql_table,
+            postgres_table=postgres_table,
         )
-        cursor = mysql_conn.cursor()
-        cursor.execute("SHOW TABLES")
-        tables = [row[0] for row in cursor.fetchall()]
-        mysql_conn.close()
-    except Exception:
-        tables = []
+        .exclude(column_mapping=None)
+        .order_by("-id")
+    )
+    saved_mapping = mapping_logs[0].column_mapping if mapping_logs else {}
+    if saved_mapping:
+        print("ℹ️ Using saved mapping:", saved_mapping)
 
+    # Connect DBs
+    mssql_conn = pyodbc.connect(MSSQL_CONN_STR)
+    mssql_cur = mssql_conn.cursor()
+    pg_conn = psycopg2.connect(**POSTGRES_PARAMS)
+    pg_cur = pg_conn.cursor()
+
+    try:
+        # ------------------------------------------
+        # Load MSSQL columns
+        # ------------------------------------------
+        mssql_cur.execute(
+            f"""
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_NAME = '{mssql_table}'
+            ORDER BY ORDINAL_POSITION
+        """
+        )
+        all_cols = [c[0] for c in mssql_cur.fetchall()]
+
+        # Skip MSSQL "id" column if present
+        mssql_cols = [c for c in all_cols if c.lower() != "id"]
+
+        if not mssql_cols:
+            raise Exception("No valid MSSQL columns found")
+
+        select_cols = ",".join(f"[{c}]" for c in mssql_cols)
+        mssql_cur.execute(f"SELECT {select_cols} FROM [{mssql_table}]")
+        raw_rows = mssql_cur.fetchall()
+
+        rows = []
+        for r in raw_rows:
+            d = {}
+            for idx, col in enumerate(mssql_cols):
+                d[col] = r[idx]
+            rows.append(d)
+
+        print(f"📦 Loaded {len(rows)} rows from MSSQL table '{mssql_table}'")
+
+        # ------------------------------------------
+        # Determine mapping
+        # ------------------------------------------
+        if saved_mapping:
+            mapping = saved_mapping
+        else:
+            # Auto-map by column name
+            pg_cur.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema='public' AND table_name=%s
+                ORDER BY ordinal_position
+            """,
+                [postgres_table],
+            )
+            pg_cols = [c[0] for c in pg_cur.fetchall()]
+            print(f"PG columns for '{postgres_table}':", pg_cols)
+
+            mapping = {}
+            lower_pg = {c.lower(): c for c in pg_cols}
+            for m in mssql_cols:
+                if m.lower() in lower_pg:
+                    mapping[m] = lower_pg[m.lower()]
+
+        if not mapping:
+            raise Exception(
+                f"No column mapping available (MSSQL: {mssql_table}, PG: {postgres_table}). "
+                f"Please create mapping in the UI first."
+            )
+
+        pg_columns = list(mapping.values())
+        print("✅ Final column mapping:", mapping)
+
+        # ------------------------------------------
+        # VALIDATION (Option A2)
+        # Stop migration if PG has required fields NOT mapped
+        # ------------------------------------------
+        required_pg_cols = get_pg_required_columns(pg_cur, postgres_table)
+        missing_required = [c for c in required_pg_cols if c not in pg_columns]
+
+        if missing_required:
+            raise Exception(
+                f"Unable to migrate: Missing required PG columns {missing_required}. "
+                f"Map these columns or add defaults before migrating."
+            )
+
+        # ------------------------------------------
+        # Apply mapping to rows
+        # ------------------------------------------
+        mapped_rows = [apply_mapping(r, mapping) for r in rows]
+
+        if not mapped_rows:
+            print("⚠️ No rows to insert after mapping.")
+            return 0
+
+        # ------------------------------------------
+        # Insert data
+        # ------------------------------------------
+        col_str = ",".join(f'"{c}"' for c in pg_columns)
+        placeholders = ",".join(["%s"] * len(pg_columns))
+
+        inserted = 0
+
+        for row_dict in mapped_rows:
+            values = [clean_value(row_dict.get(c)) for c in pg_columns]
+
+            try:
+                pg_cur.execute(
+                    f'INSERT INTO "{postgres_table}" ({col_str}) VALUES ({placeholders})',
+                    values,
+                )
+                inserted += 1
+
+            except errors.NotNullViolation as e:
+                # A NOT NULL column without value slipped through
+                print("❌ NOT NULL violation, row skipped:", e)
+                continue
+            except Exception as e:
+                # For now, stop on first unexpected error so you can see it clearly
+                print("❌ INSERT ERROR:", e)
+                raise Exception(f"Insert failed for table {postgres_table}: {e}")
+
+        pg_conn.commit()
+        print(f"✅ SUCCESS: inserted {inserted} rows into '{postgres_table}'")
+        return inserted
+
+    finally:
+        try:
+            mssql_conn.close()
+        except Exception:
+            pass
+        try:
+            pg_conn.close()
+        except Exception:
+            pass
+
+
+# =====================================================
+# VIEWS / AJAX
+# =====================================================
+def db_migration_tool(request):
     logs = MigrationLog.objects.all().order_by("-migrated_at")
+    paginator = Paginator(logs, 20)
+    page = paginator.get_page(request.GET.get("page"))
+    return render(request, "db_migrate.html", {"logs": page})
 
-    return render(request, "db_migrate.html", {
-        "tables": tables,
-        "logs": logs
-    })
+
+def ajax_load_mssql_tables(request):
+    try:
+        conn = pyodbc.connect(MSSQL_CONN_STR)
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sys.tables ORDER BY name")
+        tables = [r[0] for r in cur.fetchall()]
+        conn.close()
+        return JsonResponse({"status": "ok", "tables": tables})
+    except Exception:
+        return JsonResponse({"status": "error", "tables": []})
+
+
+def ajax_get_postgres_tables(request):
+    try:
+        pg = psycopg2.connect(**POSTGRES_PARAMS)
+        cur = pg.cursor()
+        cur.execute(
+            """
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema='public' ORDER BY table_name
+        """
+        )
+        tables = [r[0] for r in cur.fetchall()]
+        pg.close()
+        return JsonResponse({"status": "ok", "tables": tables})
+    except Exception:
+        return JsonResponse({"status": "error", "tables": []})
+
+
+def ajax_get_columns(request, table_name):
+    try:
+        # MSSQL
+        conn = pyodbc.connect(MSSQL_CONN_STR)
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_NAME='{table_name}'
+            ORDER BY ORDINAL_POSITION
+        """
+        )
+        mssql_cols = [r[0] for r in cur.fetchall()]
+        conn.close()
+
+        # PG
+        pg_table = request.GET.get("pg", table_name)
+        pg = psycopg2.connect(**POSTGRES_PARAMS)
+        cur = pg.cursor()
+        cur.execute(
+            """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema='public' AND table_name=%s
+            ORDER BY ordinal_position
+        """,
+            [pg_table],
+        )
+        pg_cols = [r[0] for r in cur.fetchall()]
+        pg.close()
+
+        return JsonResponse(
+            {
+                "status": "ok",
+                "mssql_columns": mssql_cols,
+                "pg_columns": pg_cols,
+                "auto_pg_table": pg_table,
+            }
+        )
+
+    except Exception as e:
+        return JsonResponse({"status": "error", "error": str(e)})
+
+
+def ajax_save_mapping(request):
+    try:
+        data = json.loads(request.body.decode())
+        MigrationLog.objects.create(
+            mssql_table=data["mssql_table"],
+            postgres_table=data["pg_table"],
+            column_mapping=data["mapping"],
+            status="MappingSaved",
+        )
+        return JsonResponse({"status": "ok"})
+    except Exception as e:
+        return JsonResponse({"status": "error", "error": str(e)})
 
 
 def migrate_single_table(request):
     if request.method != "POST":
         return redirect("db_migration_tool")
 
-    mysql_table = request.POST.get("mysql_table")
-    postgres_table = request.POST.get("postgres_table")
+    mssql_table = request.POST.get("mssql_table")
+    pg_table = request.POST.get("postgres_table") or None
 
-    log = MigrationLog(mysql_table=mysql_table, postgres_table=postgres_table)
+    # Determine final PG table for logging (same rule as run_table_migration)
+    if pg_table:
+        log_pg = pg_table
+    else:
+        log_pg = (
+            "MahilMartPOS_App_supplier"
+            if mssql_table.lower() == "supplier"
+            else mssql_table
+        )
+
+    log = MigrationLog(mssql_table=mssql_table, postgres_table=log_pg)
 
     try:
-        # Connect MySQL
-        mysql_conn = MySQLdb.connect(
-            host="localhost",
-            user="root",
-            passwd="YOUR_MYSQL_PASSWORD",
-            db="YOUR_MYSQL_DB"
-        )
-        mysql_cur = mysql_conn.cursor()
-
-        # Connect Postgres
-        pg_conn = psycopg2.connect(
-            host="localhost",
-            user="postgres",
-            password="YOUR_PG_PASSWORD",
-            dbname="YOUR_POSTGRES_DB"
-        )
-        pg_cur = pg_conn.cursor()
-
-        # ===== FETCH STRUCTURE =====
-        mysql_cur.execute(f"SHOW COLUMNS FROM {mysql_table}")
-        columns = mysql_cur.fetchall()
-
-        # Auto-create table if missing
-        col_defs = []
-        for col in columns:
-            name, col_type = col[0], col[1]
-
-            if "int" in col_type:
-                pg_type = "INTEGER"
-            elif "decimal" in col_type:
-                pg_type = "DECIMAL(18,2)"
-            elif "date" in col_type:
-                pg_type = "DATE"
-            elif "datetime" in col_type:
-                pg_type = "TIMESTAMP"
-            else:
-                pg_type = "TEXT"
-
-            col_defs.append(f'"{name}" {pg_type}')
-
-        create_query = f'CREATE TABLE IF NOT EXISTS "{postgres_table}" ({",".join(col_defs)});'
-        pg_cur.execute(create_query)
-        pg_conn.commit()
-
-        # ===== FETCH ROWS =====
-        mysql_cur.execute(f"SELECT * FROM {mysql_table}")
-        rows = mysql_cur.fetchall()
-        row_count = len(rows)
-
-        columns_only = [c[0] for c in columns]
-        col_str = ",".join(f'"{c}"' for c in columns_only)
-        placeholder = ",".join(["%s"] * len(columns_only))
-
-        # ===== INSERT INTO POSTGRES =====
-        for row in rows:
-            query = f'INSERT INTO "{postgres_table}" ({col_str}) VALUES ({placeholder})'
-            pg_cur.execute(query, row)
-
-        pg_conn.commit()
-
-        log.migrated_rows = row_count
+        count = run_table_migration(mssql_table, pg_table)
         log.status = "Success"
-        messages.success(request, f"{mysql_table} → {postgres_table} migrated ({row_count} rows)")
+        log.migrated_rows = count
+        messages.success(request, f"Imported {count} rows into {log_pg}")
 
     except Exception as e:
         log.status = "Failed"
         log.error_message = str(e)
         messages.error(request, f"Migration failed: {e}")
 
-    finally:
-        log.save()
-        try: mysql_conn.close()
-        except: pass
-        try: pg_conn.close()
-        except: pass
-
+    log.save()
     return redirect("db_migration_tool")
+
+
+# =====================================================
+# JOB SYSTEM (ALL TABLES)
+# =====================================================
+def start_migration_job(request):
+    if (
+        request.method != "POST"
+        or request.headers.get("X-Requested-With") != "XMLHttpRequest"
+    ):
+        return HttpResponseBadRequest("Invalid request")
+
+    payload = json.loads(request.body.decode("utf-8"))
+    mode = payload.get("mode", "all")
+
+    if mode == "all":
+        try:
+            conn = pyodbc.connect(MSSQL_CONN_STR)
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sys.tables ORDER BY name")
+            tables = [r[0] for r in cur.fetchall()]
+            conn.close()
+        except Exception:
+            return JsonResponse(
+                {"status": "error", "error": "MSSQL connection failed"}
+            )
+    else:
+        return JsonResponse({"status": "error", "error": "Unsupported mode"})
+
+    job_id = str(uuid.uuid4())
+    job_data = {
+        "status": "running",
+        "total_tables": len(tables),
+        "completed_tables": 0,
+        "tables": {},
+    }
+
+    for t in tables:
+        job_data["tables"][t] = {"status": "pending", "rows": 0, "error": None}
+
+    with job_lock:
+        migration_jobs[job_id] = job_data
+
+    def worker(table_name):
+        with job_lock:
+            migration_jobs[job_id]["tables"][table_name]["status"] = "running"
+
+        pg_name = (
+            "MahilMartPOS_App_supplier"
+            if table_name.lower() == "supplier"
+            else table_name
+        )
+        log = MigrationLog(mssql_table=table_name, postgres_table=pg_name)
+
+        try:
+            count = run_table_migration(table_name, None)
+            log.migrated_rows = count
+            log.status = "Success"
+
+            with job_lock:
+                job = migration_jobs[job_id]
+                job["tables"][table_name]["status"] = "success"
+                job["tables"][table_name]["rows"] = count
+                job["completed_tables"] += 1
+
+        except Exception as e:
+            log.status = "Failed"
+            log.error_message = str(e)
+
+            with job_lock:
+                job = migration_jobs[job_id]
+                job["tables"][table_name]["status"] = "failed"
+                job["tables"][table_name]["error"] = str(e)
+                job["completed_tables"] += 1
+
+        finally:
+            log.save()
+
+            with job_lock:
+                job = migration_jobs[job_id]
+                if job["completed_tables"] >= job["total_tables"]:
+                    job["status"] = "finished"
+
+    for t in tables:
+        executor.submit(worker, t)
+
+    return JsonResponse({"status": "ok", "job_id": job_id})
+
+
+def migration_job_status(request, job_id):
+    with job_lock:
+        job = migration_jobs.get(job_id)
+
+    if not job:
+        return JsonResponse({"status": "unknown"})
+
+    total = job["total_tables"]
+    done = job["completed_tables"]
+
+    return JsonResponse(
+        {
+            "status": job["status"],
+            "total_tables": total,
+            "completed_tables": done,
+            "percent": int(done / total * 100) if total else 100,
+            "tables": job["tables"],
+        }
+    )
 
 
 def migrate_all_tables(request):
     try:
-        mysql_conn = MySQLdb.connect(
-            host="localhost",
-            user="root",
-            passwd="YOUR_MYSQL_PASSWORD",
-            db="YOUR_MYSQL_DB"
-        )
-        cursor = mysql_conn.cursor()
-        cursor.execute("SHOW TABLES")
-        tables = [row[0] for row in cursor.fetchall()]
-        mysql_conn.close()
+        conn = pyodbc.connect(MSSQL_CONN_STR)
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sys.tables ORDER BY name")
+        tables = [r[0] for r in cur.fetchall()]
+        conn.close()
 
-        for table in tables:
-            request.POST = {"mysql_table": table, "postgres_table": table}
-            migrate_single_table(request)
+        for t in tables:
+            pg_table = (
+                "MahilMartPOS_App_supplier" if t.lower() == "supplier" else t
+            )
+            log = MigrationLog(mssql_table=t, postgres_table=pg_table)
 
-        messages.success(request, "Entire MySQL database migrated successfully!")
+            try:
+                count = run_table_migration(t, None)
+                log.status = "Success"
+                log.migrated_rows = count
+            except Exception as e:
+                log.status = "Failed"
+                log.error_message = str(e)
+
+            log.save()
+
+        messages.success(request, "Full migration completed successfully!")
+        cache.delete("mssql_tables")
 
     except Exception as e:
-        messages.error(request, f"Migration failed: {e}")
+        messages.error(request, f"Failed: {e}")
 
     return redirect("db_migration_tool")
+
+
+from django.shortcuts import render
+from django.contrib.auth.decorators import login_required
+from django.core.paginator import Paginator
+from datetime import timedelta
+
+from .models import ActivityLog
+
+
+@login_required
+def activity_log_view(request):
+    # Base queryset (only login/logout)
+    qs = ActivityLog.objects.filter(
+        action__in=["LOGIN", "LOGOUT"]
+    ).order_by("created_at")
+
+    # --------------------
+    # Filters
+    # --------------------
+    user = request.GET.get("user")
+    start_date = request.GET.get("start_date")
+    end_date = request.GET.get("end_date")
+
+    if user:
+        qs = qs.filter(username__icontains=user)
+
+    if start_date:
+        qs = qs.filter(created_at__date__gte=start_date)
+
+    if end_date:
+        qs = qs.filter(created_at__date__lte=end_date)
+
+    # --------------------
+    # Pair LOGIN + LOGOUT
+    # --------------------
+    sessions = []
+    open_sessions = {}
+
+    for log in qs:
+        key = (log.username, log.ip_address)
+
+        if log.action == "LOGIN":
+            open_sessions[key] = log
+
+        elif log.action == "LOGOUT" and key in open_sessions:
+            login_log = open_sessions.pop(key)
+
+            duration = log.created_at - login_log.created_at
+            duration_str = _format_duration(duration)
+
+            sessions.append({
+                "username": login_log.username,
+                "role": login_log.role,
+                "login_time": login_log.created_at.strftime("%d-%m-%Y %H:%M:%S"),
+                "logout_time": log.created_at.strftime("%d-%m-%Y %H:%M:%S"),
+                "duration": duration_str,
+                "ip_address": login_log.ip_address,
+            })
+
+    # --------------------
+    # Still logged-in users
+    # --------------------
+    for login_log in open_sessions.values():
+        sessions.append({
+            "username": login_log.username,
+            "role": login_log.role,
+            "login_time": login_log.created_at.strftime("%d-%m-%Y %H:%M:%S"),
+            "logout_time": None,
+            "duration": None,
+            "ip_address": login_log.ip_address,
+        })
+
+    # Latest sessions first
+    sessions.reverse()
+
+    # --------------------
+    # Pagination
+    # --------------------
+    paginator = Paginator(sessions, 20)
+    page_number = request.GET.get("page")
+    page_obj = paginator.get_page(page_number)
+
+    context = {
+        "sessions": page_obj,
+    }
+
+    return render(request, "activity_log.html", context)
+
+
+def _format_duration(duration: timedelta) -> str:
+    total_seconds = int(duration.total_seconds())
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"

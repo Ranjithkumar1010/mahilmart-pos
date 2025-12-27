@@ -534,7 +534,7 @@
 
             {% if request.user.is_superuser or perm.allow_logs %}
             <li class="nav-item">
-                <a href="#">
+                <a href="{% url 'activity_log' %}">
                     <i class="fas fa-history"></i> Activity Logs
                 </a>
             </li>
