@@ -30,6 +30,9 @@ urlpatterns = [
     path('dashboard/', views.dashboard_view, name='dashboard'),
     path('computer-alias/', views.computer_alias_view, name='computer_alias'),
 
+    #point config
+    path("points-config/", views.points_config_view, name="points_config"),
+
     path('generate-report/', views.generate_report, name='generate_report'),
     path('billing/<int:id>/', views.billing_detail_view, name='billing_detail'),
     path('billing/<int:bill_id>/items/', views.billing_items_api, name='billing_items_api'),
@@ -103,6 +106,7 @@ urlpatterns = [
     path('purchase/tracking/', views.purchase_tracking, name='purchase_update_tracking'),
     path("purchase/", views.purchase_page, name="purchase_page"),
     path('purchase_items/', views.purchase_items_view, name='purchase_items'),
+    path("api/purchase-products/", views.purchase_products_api, name="purchase_products_api"),
     path('api/purchase-payments/<str:invoice_no>/', views.purchase_payments_api, name='purchase-payments-api'),
 
     # B: safe path that accepts base64-encoded invoice (useful when invoices contain '/')

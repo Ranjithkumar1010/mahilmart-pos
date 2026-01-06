@@ -314,51 +314,57 @@
 </div>
 
 <!-- Group Creation Modal -->
-<div class="modal fade" id="groupModal" tabindex="-1" aria-labelledby="groupModalLabel" aria-hidden="true">
-  <div class="modal-dialog modal-lg">
+<!-- Group Creation Modal -->
+<div class="modal fade" id="groupModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
     <div class="modal-content">
       <form method="POST" id="groupModalForm">
         {% csrf_token %}
+
         <div class="modal-header">
-          <h5 class="modal-title" id="groupModalLabel">Group Creation</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          <h5 class="modal-title">Group Creation</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
         </div>
 
         <div class="modal-body">
+
           <div class="mb-3">
-            <label class="form-label">Group Name:</label>
+            <label class="form-label">Group Name *</label>
             <input type="text" name="group_name" class="form-control" required>
           </div>
 
           <div class="mb-3">
-            <label class="form-label">Alias Name:</label>
+            <label class="form-label">Alias Name</label>
             <input type="text" name="alias_name" class="form-control">
           </div>
 
           <div class="mb-3">
-            <label class="form-label">Under:</label>
-            <input type="text" name="under" class="form-control">
+            <label class="form-label">Under (Parent Group)</label>
+            <select name="under" class="form-select">
+              <option value="">-- Root Group --</option>
+              {% for g in groups %}
+                <option value="{{ g.id }}">{{ g.group_name }}</option>
+              {% endfor %}
+            </select>
           </div>
 
           <div class="mb-3">
-            <label class="form-label">Print Name:</label>
+            <label class="form-label">Print Name</label>
             <input type="text" name="print_name" class="form-control">
           </div>
 
-          <div class="mb-3">
-            <label class="form-label">Commodity:</label>
-            <input type="text" name="commodity" class="form-control">
-          </div>
         </div>
 
         <div class="modal-footer">
           <button type="submit" class="btn btn-primary">Save</button>
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
         </div>
+
       </form>
     </div>
   </div>
 </div>
+
 
 <!-- Brand Creation Modal -->
 <div class="modal fade" id="brandModal" tabindex="-1" aria-labelledby="brandModalLabel" aria-hidden="true">
@@ -402,199 +408,205 @@
 
 {% block extra_js %}
 <script>
-document.addEventListener('DOMContentLoaded', () => {
-    const form = document.querySelector('form');
-    const saveBtn = document.getElementById('saveBtn');
+document.addEventListener("DOMContentLoaded", function () {
 
-    // Before save confirmation
-    saveBtn.addEventListener('click', function(e) {
-        const confirmed = confirm("Are you sure you want to save?");
-        if (!confirmed) {
-            e.preventDefault();
-        }
-    });
-
-    // After save success messages
-    const messagesScript = document.getElementById('djangoMessages');
-    if (messagesScript) {
-        const messages = JSON.parse(messagesScript.textContent);
-        messages.forEach(msg => {
-            alert(msg.message);  // Show alert for each message
+    /* ===============================
+       SAVE CONFIRMATION (ONCE)
+    =============================== */
+    const saveBtn = document.getElementById("saveBtn");
+    if (saveBtn) {
+        saveBtn.addEventListener("click", function (e) {
+            if (!confirm("Are you sure you want to save?")) {
+                e.preventDefault();
+            }
         });
     }
-});
 
-document.getElementById("saveBtn").addEventListener("click", function(event) {
-    let confirmSave = confirm("Are you sure you want to save?");
-    if (!confirmSave) {
-        event.preventDefault();
+    /* ===============================
+       ITEM CODE DUPLICATE CHECK
+    =============================== */
+    const itemCodeInput = document.getElementById("item_code");
+    const codeAlert = document.getElementById("codeAlert");
+
+    if (itemCodeInput) {
+        itemCodeInput.addEventListener("blur", function () {
+            const code = this.value.trim();
+            if (!code) return;
+
+            fetch(`/check-item-code/?code=${encodeURIComponent(code)}`)
+                .then(res => res.json())
+                .then(data => {
+                    const submitBtn = document.querySelector("button[type='submit']");
+
+                    if (data.exists) {
+                        codeAlert.style.display = "inline";
+                        itemCodeInput.style.borderColor = "red";
+                        submitBtn.disabled = true;
+                        itemCodeInput.focus();
+                        itemCodeInput.addEventListener("keydown", blockTab, true);
+                    } else {
+                        codeAlert.style.display = "none";
+                        itemCodeInput.style.borderColor = "";
+                        submitBtn.disabled = false;
+                        itemCodeInput.removeEventListener("keydown", blockTab, true);
+                    }
+                })
+                .catch(err => console.error("Code check error:", err));
+        });
     }
-});
 
-document.getElementById("item_code").addEventListener("blur", function() {
-    const codeInput = this;
-    const code = codeInput.value.trim();
-    if (code === "") return;
-
-    fetch(`/check-item-code/?code=${encodeURIComponent(code)}`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.exists) {
-                // Show warning and block movement
-                document.getElementById("codeAlert").style.display = "inline";
-                codeInput.style.borderColor = "red";
-                document.querySelector("button[type='submit']").disabled = true;
-
-                // Focus back to input
-                setTimeout(() => codeInput.focus(), 0);
-
-                // Block tab key temporarily
-                codeInput.addEventListener('keydown', blockTab, true);
-            } else {
-                // Code is unique, allow normal interaction
-                document.getElementById("codeAlert").style.display = "none";
-                codeInput.style.borderColor = "";
-                document.querySelector("button[type='submit']").disabled = false;
-
-                // Remove the tab-blocking listener
-                codeInput.removeEventListener('keydown', blockTab, true);
-            }
-        })
-        .catch(error => console.error("Error:", error));
-});
-
-// Function to block tab key when code exists
-function blockTab(e) {
-    if (e.key === "Tab") {
-        e.preventDefault();
+    function blockTab(e) {
+        if (e.key === "Tab") e.preventDefault();
     }
-}
 
-document.getElementById("unitForm").addEventListener("submit", function(e) {
-    e.preventDefault();
+    /* ===============================
+       UNIT CREATION (AJAX)
+    =============================== */
+    const unitForm = document.getElementById("unitForm");
+    if (unitForm) {
+        unitForm.addEventListener("submit", function (e) {
+            e.preventDefault();
 
-    let formData = new FormData(this);
+            const formData = new FormData(this);
 
-    fetch("{% url 'unit_creation' %}", {
-        method: "POST",
-        headers: { 
-            "X-CSRFToken": "{{ csrf_token }}",
-            "X-Requested-With": "XMLHttpRequest"
-        },
-        body: formData
-    })
-    .then(res => res.json())
-    .then(data => {
-        if (data.success) {
-            // Update both dropdowns (#unit and #p_unit)
-            ["unit", "p_unit"].forEach(id => {
-                let dropdown = document.getElementById(id);
-                if (dropdown) {
-                    let option = document.createElement("option");
-                    option.value = data.id;
-                    option.textContent = data.name;
-                    dropdown.appendChild(option);
-
-                    // auto-select the new unit
-                    option.selected = true;
+            fetch("{% url 'unit_creation' %}", {
+                method: "POST",
+                body: formData,
+                headers: {
+                    "X-CSRFToken": "{{ csrf_token }}",
+                    "X-Requested-With": "XMLHttpRequest"
                 }
-            });
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    ["unit", "p_unit"].forEach(id => {
+                        const select = document.getElementById(id);
+                        if (select) {
+                            const opt = document.createElement("option");
+                            opt.value = data.id;
+                            opt.textContent = data.name;
+                            opt.selected = true;
+                            select.appendChild(opt);
+                        }
+                    });
 
-            // Close modal
-            var modal = bootstrap.Modal.getInstance(document.getElementById('unitModal'));
-            modal.hide();
+                    bootstrap.Modal.getInstance(
+                        document.getElementById("unitModal")
+                    ).hide();
 
-            this.reset();
-        } else {
-            alert("Error creating unit!");
-        }
-    });
-});
-
-document.getElementById("groupModalForm").addEventListener("submit", function(e) {
-    e.preventDefault();
-
-    let formData = new FormData(this);
-
-    fetch("{% url 'group_creation' %}", {
-        method: "POST",
-        body: formData,
-        headers: {
-            "X-Requested-With": "XMLHttpRequest"
-        }
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            // Add new option to dropdown
-            let groupSelect = document.getElementById("group");
-            let newOption = document.createElement("option");
-            newOption.value = data.id;
-            newOption.text = data.name;
-            newOption.selected = true;
-            groupSelect.appendChild(newOption);
-           
-            let modal = bootstrap.Modal.getInstance(document.getElementById("groupModal"));
-            modal.hide();
-         
-            document.getElementById("groupModalForm").reset();
-        } else {
-            alert(data.error || "Failed to create group");
-        }
-    })
-    .catch(error => {
-        console.error("Error:", error);
-        alert("Something went wrong. Please try again.");
-    });
-});
-
-document.getElementById("brandModalForm").addEventListener("submit", function(e) {
-    e.preventDefault();
-
-    const formData = new FormData(this);
-
-    fetch("{% url 'brand_creation' %}", {
-        method: "POST",
-        body: formData,
-        headers: {
-            "X-Requested-With": "XMLHttpRequest"
-        }
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            let brandSelect = document.getElementById("brand"); // your brand dropdown ID
-            let option = document.createElement("option");
-            option.value = data.id;
-            option.text = data.name;
-            option.selected = true;
-            brandSelect.add(option);
-
-            // close modal
-            let modal = bootstrap.Modal.getInstance(document.getElementById("brandModal"));
-            modal.hide();
-
-            this.reset();
-        }
-    })
-    .catch(err => console.error(err));
-});
-
-document.getElementById("brand").addEventListener("change", function() {
-    const brandSelect = this;
-    const barcodeInput = document.getElementById("barcode");
-    const codeInput = document.getElementById("item_code");
-
-    // Only generate barcode if Mahil is selected
-    const selectedBrand = brandSelect.options[brandSelect.selectedIndex].text.trim().toLowerCase();
-    if (selectedBrand === "mahil") {
-        const itemCode = codeInput.value.trim();
-        if (itemCode) {
-            barcodeInput.value = "890" + itemCode;
-        } else {
-            barcodeInput.value = "";
-        }
+                    unitForm.reset();
+                } else {
+                    alert(data.error || "Failed to create unit");
+                }
+            })
+            .catch(err => console.error(err));
+        });
     }
+
+    /* ===============================
+       GROUP CREATION (AJAX)
+    =============================== */
+    const groupForm = document.getElementById("groupModalForm");
+    if (groupForm) {
+        groupForm.addEventListener("submit", function (e) {
+            e.preventDefault();
+
+            const formData = new FormData(this);
+
+            fetch("{% url 'group_creation' %}", {
+                method: "POST",
+                body: formData,
+                headers: {
+                    "X-CSRFToken": "{{ csrf_token }}",
+                    "X-Requested-With": "XMLHttpRequest"
+                }
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    const groupSelect = document.getElementById("group");
+                    const opt = document.createElement("option");
+                    opt.value = data.id;
+                    opt.textContent = data.name;
+                    opt.selected = true;
+                    groupSelect.appendChild(opt);
+
+                    bootstrap.Modal.getInstance(
+                        document.getElementById("groupModal")
+                    ).hide();
+
+                    groupForm.reset();
+                } else {
+                    alert(data.error || "Failed to create group");
+                }
+            })
+            .catch(err => {
+                console.error(err);
+                alert("Something went wrong. Please try again.");
+            });
+        });
+    }
+
+    /* ===============================
+       BRAND CREATION (AJAX)
+    =============================== */
+    const brandForm = document.getElementById("brandModalForm");
+    if (brandForm) {
+        brandForm.addEventListener("submit", function (e) {
+            e.preventDefault();
+
+            const formData = new FormData(this);
+
+            fetch("{% url 'brand_creation' %}", {
+                method: "POST",
+                body: formData,
+                headers: {
+                    "X-CSRFToken": "{{ csrf_token }}",
+                    "X-Requested-With": "XMLHttpRequest"
+                }
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    const brandSelect = document.getElementById("brand");
+                    const opt = document.createElement("option");
+                    opt.value = data.id;
+                    opt.textContent = data.name;
+                    opt.selected = true;
+                    brandSelect.appendChild(opt);
+
+                    bootstrap.Modal.getInstance(
+                        document.getElementById("brandModal")
+                    ).hide();
+
+                    brandForm.reset();
+                } else {
+                    alert(data.error || "Failed to create brand");
+                }
+            })
+            .catch(err => console.error(err));
+        });
+    }
+
+    /* ===============================
+       BARCODE AUTO-GENERATION
+    =============================== */
+    const brandSelect = document.getElementById("brand");
+    if (brandSelect) {
+        brandSelect.addEventListener("change", function () {
+            const barcodeInput = document.getElementById("barcode");
+            const codeInput = document.getElementById("item_code");
+            if (!barcodeInput || !codeInput) return;
+
+            const brandName = this.options[this.selectedIndex].text.trim().toLowerCase();
+            barcodeInput.value = brandName === "mahil" && codeInput.value
+                ? "890" + codeInput.value.trim()
+                : "";
+        });
+    }
+
 });
 </script>
+
 {% endblock %}

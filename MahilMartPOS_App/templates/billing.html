@@ -869,9 +869,9 @@ body {
             
             
             <!-- Customer Preview -->
-            <div id="customerPreview" class="customer-preview" style="display: none;">
+            <!-- <div id="customerPreview" class="customer-preview" style="display: none;">
                 Customer details will appear here
-            </div>
+            </div> -->
         </div>
 
         <!-- Items Table -->
@@ -1079,6 +1079,7 @@ body {
 
 {% block extra_js %}
 <script>
+let isNewCustomerLocked = false;
 
      const COMPANY = {
             name: "{{ company.print_name|default:company.company_name|default:'MY STORE'|escapejs }}",
@@ -1172,17 +1173,23 @@ function setupCustomerLookup() {
 
     // Main customer check function
     function handleCustomerCheck() {
+
+        // 🚫 If new customer already saved, do nothing
+        if (isNewCustomerLocked) {
+            return;
+        }
+
         const phone = cellInput.value.trim();
-        
-        // Validate phone number format
+
+        // ===============================
+        // PHONE VALIDATION
+        // ===============================
         if (!/^\d{10}$/.test(phone)) {
             if (phone.length > 0 && phone.length < 10) {
-                return; // Still typing, don't check yet
+                return; // Still typing
             }
             if (phone.length >= 10) {
-                // Invalid format, clear customer info
                 clearCustomerInfo();
-                return;
             }
             return;
         }
@@ -1192,47 +1199,51 @@ function setupCustomerLookup() {
         })
         .then(res => res.json())
         .then(data => {
+
+            // ===============================
+            // NEW CUSTOMER
+            // ===============================
             if (!data.name) {
-                // No customer found, clear fields
                 clearCustomerInfo();
+
+                // 🔥 OPEN POPUP ONLY ONCE
+                openCustomerPopup();
                 return;
             }
 
             // ===============================
-            // CUSTOMER DETAILS
+            // EXISTING CUSTOMER
             // ===============================
+            nameInput.removeAttribute("readonly");
+            addressInput.removeAttribute("readonly");
+
             nameInput.value = data.name;
             addressInput.value = data.customer_address || "";
 
             // ===============================
-            // OLD POINTS (FROM BACKEND)
+            // OLD POINTS
             // ===============================
             const oldPoints = parseFloat(data.points) || 0;
 
-            // Hidden old points
             if (oldPointsInput) {
                 oldPointsInput.value = oldPoints.toFixed(2);
             }
 
-            // Visible old points
-            const oldPointsDisplay = document.getElementById('oldPointsDisplay');
+            const oldPointsDisplay = document.getElementById("oldPointsDisplay");
             if (oldPointsDisplay) {
                 oldPointsDisplay.textContent = oldPoints.toFixed(2);
             }
 
             // ===============================
-            // RECALCULATE TOTAL POINTS
+            // UPDATE UI
             // ===============================
             updatePointsDisplay();
-
             showCustomerPreview(data.name);
-            
-            // Auto-focus on item code input after customer lookup
+
+            // Focus item code
             setTimeout(() => {
                 const firstCodeInput = document.querySelector('input[name="code"]');
-                if (firstCodeInput) {
-                    firstCodeInput.focus();
-                }
+                firstCodeInput?.focus();
             }, 100);
         })
         .catch(err => {
@@ -1241,20 +1252,33 @@ function setupCustomerLookup() {
         });
     }
 
+
     function clearCustomerInfo() {
+
+    // 🚫 Do not clear if new customer already saved
+        if (isNewCustomerLocked) {
+            return;
+        }
+
         nameInput.value = "";
         addressInput.value = "";
-        if (oldPointsInput) oldPointsInput.value = "0";
-        
-        const oldPointsDisplay = document.getElementById('oldPointsDisplay');
-        if (oldPointsDisplay) oldPointsDisplay.textContent = "0.00";
-        
+
+        if (oldPointsInput) {
+            oldPointsInput.value = "0";
+        }
+
+        const oldPointsDisplay = document.getElementById("oldPointsDisplay");
+        if (oldPointsDisplay) {
+            oldPointsDisplay.textContent = "0.00";
+        }
+
         updatePointsDisplay();
-        
+
         if (customerPreview) {
             customerPreview.style.display = "none";
         }
     }
+
 
     function showCustomerPreview(name) {
         if (customerPreview) {
@@ -1262,6 +1286,7 @@ function setupCustomerLookup() {
             customerPreview.style.display = "flex";
         }
     }
+
 }
 
 // Customer popup functions
@@ -1290,29 +1315,46 @@ function closeCustomerPopup() {
 function saveCustomerPopup() {
     const popup_name = document.getElementById("popup_name");
     const popup_address = document.getElementById("popup_address");
+
     const nameInput = document.getElementById("name");
     const addressInput = document.getElementById("address");
     const customerPreview = document.getElementById("customerPreview");
 
     if (!popup_name || !popup_name.value.trim()) {
         alert("Customer name is required");
-        popup_name?.focus();
+        popup_name.focus();
         return;
     }
 
-    if (nameInput) nameInput.value = popup_name.value.trim();
-    if (addressInput) addressInput.value = popup_address.value.trim();
+    // 🔒 LOCK auto customer lookup
+    isNewCustomerLocked = true;
 
+    // ✅ REMOVE readonly (important)
+    if (nameInput) nameInput.removeAttribute("readonly");
+    if (addressInput) addressInput.removeAttribute("readonly");
+
+    // ✅ SET VALUES
+    if (nameInput) {
+        nameInput.value = popup_name.value.trim();
+    }
+
+    if (addressInput) {
+        addressInput.value = popup_address.value.trim();
+    }
+
+    // ✅ SHOW PREVIEW
     if (customerPreview) {
         customerPreview.innerHTML = `👤 ${popup_name.value.trim()}`;
         customerPreview.style.display = "flex";
     }
-    
-    // Update points if needed
+
+    // ✅ UPDATE POINTS
     updatePointsDisplay();
-    
+
+    // ✅ CLOSE POPUP
     closeCustomerPopup();
 }
+
 
 // Modal submit action
 function submitName() {
@@ -2012,57 +2054,184 @@ function submitBilling() {
 <head>
 <meta charset="utf-8">
 <title>Bill</title>
+
 <style>
+/* =========================
+   PRINT SETUP
+========================= */
 @media print {
-    @page { size: 80mm 210mm; margin: 0; }
+    @page {
+        size: 70mm auto;
+        margin: 0;
+    }
+    html, body {
+        margin: 0;
+        padding: 0;
+    }
 }
-body { font-family: monospace; font-size: 12px; width: 79mm; }
-h2 { text-align: center; margin: 0; }
-table { width: 100%; border-collapse: collapse; }
-td { padding: 2px; }
-.line { border-top: 1px dashed #000; margin: 5px 0; }
+
+/* =========================
+   BODY
+========================= */
+body {
+    font-family: "Courier New", Courier, monospace;
+    font-size: 11px;
+
+    width: 63mm;          /* SAFE printable width */
+    margin-left: 7mm;     /* avoids left cutter dead-zone */
+
+    margin-top: 0;
+    margin-right: 0;
+    margin-bottom: 0;
+
+    padding-top: 1mm;
+    padding-bottom: 2mm;
+}
+
+/* =========================
+   HEADER
+========================= */
+h2 {
+    text-align: center;
+    margin: 0 0 4px 0;
+    font-size: 13px;
+    line-height: 1.2;
+    font-weight: bold;
+}
+
+/* =========================
+   TABLES
+========================= */
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+td, th {
+    padding: 1px 0;
+    font-size: 11px;
+}
+
+/* =========================
+   SEPARATOR
+========================= */
+.line {
+    border-top: 1px dashed #000;
+    margin: 4px 0;
+}
+
+/* =========================
+   FOOTER
+========================= */
+p {
+    margin: 4px 0 0 0;
+    text-align: center;
+    font-size: 11px;
+}
 </style>
 </head>
+
 <body>
 
+<!-- ================= HEADER ================= -->
 <h2>
 ${COMPANY.name}<br>
 ${COMPANY.address}<br>
-${COMPANY.gstin ? "GSTIN: " + COMPANY.gstin + "<br>" : ""}
-${COMPANY.phone ? "Phone: " + COMPANY.phone : ""}
+${COMPANY.gstin ? "GSTIN : " + COMPANY.gstin + "<br>" : ""}
+${COMPANY.phone ? "Phone : " + COMPANY.phone : ""}
 </h2>
 
 <div class="line"></div>
 
+<!-- ================= BILL INFO ================= -->
 <table>
-<tr><td>Bill No:</td><td align="right">${billData.bill_no}</td></tr>
-<tr><td>Date:</td><td align="right">${billData.date}</td></tr>
-<tr><td>Customer:</td><td align="right">${billData.name}</td></tr>
-<tr><td>Mobile:</td><td align="right">${billData.phone}</td></tr>
+<tr>
+    <td>Bill No :</td>
+    <td align="right">${billData.bill_no}</td>
+</tr>
+<tr>
+    <td>Date :</td>
+    <td align="right">${billData.date}</td>
+</tr>
+<tr>
+    <td>Customer :</td>
+    <td align="right">${billData.name}</td>
+</tr>
+<tr>
+    <td>Mobile :</td>
+    <td align="right">${billData.phone}</td>
+</tr>
 </table>
 
 <div class="line"></div>
 
+<!-- ================= ITEMS ================= -->
 <table>
-<tr><th>ITEM</th><th>QTY</th><th>MRP</th><th>RATE</th><th>AMT</th></tr>
+<tr>
+    <th align="left">ITEM</th>
+    <th align="right">QTY</th>
+    <th align="right">MRP</th>
+    <th align="right">RATE</th>
+    <th align="right">AMT</th>
+</tr>
+
 ${itemRows}
+
 </table>
 
 <div class="line"></div>
 
+<!-- ================= TOTALS ================= -->
 <table>
-<tr><td>Total</td><td align="right">${billData.total_amount.toFixed(2)}</td></tr>
-<tr><td>Discount</td><td align="right">${discountAmount.toFixed(2)}</td></tr>
-<tr><td><b>Grand Total</b></td><td align="right"><b>${totalAfterDiscount.toFixed(2)}</b></td></tr>
-<tr><td>Paid</td><td align="right">${(cash + card).toFixed(2)}</td></tr>
-<tr><td>Balance</td><td align="right">${billData.balance.toFixed(2)}</td></tr>
+<tr>
+    <td>Total</td>
+    <td align="right">${billData.total_amount.toFixed(2)}</td>
+</tr>
+<tr>
+    <td>Discount</td>
+    <td align="right">${discountAmount.toFixed(2)}</td>
+</tr>
+<tr>
+    <td><b>Grand Total</b></td>
+    <td align="right"><b>${totalAfterDiscount.toFixed(2)}</b></td>
+</tr>
+<tr>
+    <td>Paid</td>
+    <td align="right">${(cash + card).toFixed(2)}</td>
+</tr>
+<tr>
+    <td>Balance</td>
+    <td align="right">${billData.balance.toFixed(2)}</td>
+</tr>
 </table>
 
 <div class="line"></div>
-<p style="text-align:center">Thank You! Visit Again</p>
+
+<!-- ================= POINTS ================= -->
+<table>
+<tr>
+    <td>Old Points</td>
+    <td align="right">${billData.old_points.toFixed(2)}</td>
+</tr>
+<tr>
+    <td>Today's Points</td>
+    <td align="right">${billData.today_points.toFixed(2)}</td>
+</tr>
+<tr>
+    <td><b>Total Points</b></td>
+    <td align="right">
+        <b>${(billData.old_points + billData.today_points).toFixed(2)}</b>
+    </td>
+</tr>
+</table>
+
+<div class="line"></div>
+
+<p>Thank You! Visit Again</p>
 
 </body>
 </html>`;
+
 
         printWindow.document.open();
         printWindow.document.write(html);

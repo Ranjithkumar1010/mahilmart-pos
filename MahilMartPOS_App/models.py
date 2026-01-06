@@ -354,14 +354,20 @@ class Unit(models.Model):
         return f"{self.unit_name} ({self.UQC})"
     
 class Group(models.Model):
-    group_name = models.CharField(max_length=50)
-    alias_name = models.CharField(max_length=50)
-    under = models.CharField(max_length=50)
-    print_name = models.CharField(max_length=50)
-    commodity = models.CharField(max_length=100)
+    group_name = models.CharField(max_length=100, unique=True)
+    alias_name = models.CharField(max_length=100, blank=True, null=True)
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="children"
+    )
+    print_name = models.CharField(max_length=100, blank=True, null=True)
 
     def __str__(self):
         return self.group_name
+
     
 class Brand(models.Model):
     brand_name = models.CharField(max_length=50)
@@ -927,5 +933,8 @@ class ActivityLog(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"{self.username} - {self.action} - {self.module}"
+        return f"{self.username} - {self.action} - {self.module}"\
+        
+
+
 
