@@ -788,27 +788,82 @@ def custom_permission_denied_view(request, exception=None):
     messages.error(request, "🚫 You do not have permission to access this page.")
     return redirect('dashboard')  # make sure 'dashboard' exists in urls.py
 
+from django.shortcuts import render, redirect
+from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+
+from .models import Company, CompanyActivity
+from .forms import CompanySettingsForm
+
+
+
 @allow_company
+@login_required
 def company_settings_view(request):
+    """
+    Company Settings (Singleton Company)
+    """
+
+    # ✅ Always ensure ONE company exists
+    company, created = Company.objects.get_or_create(
+        id=1,
+        defaults={
+            "company_name": "My Company",
+            "short_name": "MC",
+            "created_by": request.user,
+            "updated_by": request.user,
+        }
+    )
+
     if request.method == 'POST':
-        form = CompanySettingsForm(request.POST)
+        # ✅ Update existing company, not create new
+        form = CompanySettingsForm(request.POST, instance=company)
+
         if form.is_valid():
-            instance = form.save()
+            instance = form.save(commit=False)
+            instance.updated_by = request.user
+            instance.save()
 
-            if instance.auto_backup:
-                if instance.daily_backup_path:
-                    backup_company_details(instance, instance.daily_backup_path)
-                if instance.daily_backup_path:
-                    backup_company_details(instance, instance.daily_backup_path)
+            # ✅ Backup logic (cleaned – no duplicate condition)
+            if instance.auto_backup and instance.daily_backup_path:
+                backup_company_details(instance, instance.daily_backup_path)
 
-            messages.success(request, "Company details saved and backup created.")
+                # 🔹 Log backup activity
+                CompanyActivity.objects.create(
+                    company=instance,
+                    user=request.user,
+                    action="Company backup created"
+                )
+
+            # 🔹 Log update activity
+            CompanyActivity.objects.create(
+                company=instance,
+                user=request.user,
+                action="Company profile updated"
+            )
+
+            messages.success(request, "Company details saved successfully.")
             return redirect('company_details')
-        else:
-            messages.error(request, "There was an error in the form.")
-    else:
-        form = CompanySettingsForm()
 
-    return render(request, 'company_details.html', {'form': form})
+        else:
+            messages.error(request, "There was an error in the form. Please check the fields.")
+
+    else:
+        # GET request → load existing data
+        form = CompanySettingsForm(instance=company)
+
+    # ✅ Recent activity (last 5)
+    activities = CompanyActivity.objects.filter(
+        company=company
+    ).order_by('-created_at')[:5]
+
+    context = {
+        'form': form,
+        'company': company,
+        'activities': activities,
+    }
+
+    return render(request, 'company_details.html', context)
 
 @allow_company
 def view_company_details(request):
