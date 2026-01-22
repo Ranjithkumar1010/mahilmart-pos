@@ -26,6 +26,10 @@ urlpatterns = [
     path("pos-theme/", views.pos_theme_view, name="pos_theme"),
     path("permission-settings/", views.permission_settings_view, name="permission_settings"),
 
+
+    path("company/settings/", views.company_name_settings_view, name="company_name_settings"),
+
+
     # dashboard page
     path('dashboard/', views.dashboard_view, name='dashboard'),
     path('computer-alias/', views.computer_alias_view, name='computer_alias'),

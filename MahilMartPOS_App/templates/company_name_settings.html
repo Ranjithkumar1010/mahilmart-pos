@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}
+Company Settings
+{% endblock %}
+
+{% block content %}
+
+<style>
+    .company-container {
+        max-width: 500px;
+        margin: 40px auto;
+        background: #fff;
+        padding: 25px;
+        border-radius: 8px;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+    }
+
+    .company-container h2 {
+        margin-bottom: 20px;
+        text-align: center;
+    }
+
+    .company-container label {
+        font-weight: bold;
+    }
+
+    .company-container .form-control {
+        width: 100%;
+        padding: 10px;
+        margin-top: 5px;
+        margin-bottom: 15px;
+    }
+
+    .company-container button {
+        width: 100%;
+        padding: 10px;
+        background: #111;
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        font-size: 15px;
+        cursor: pointer;
+    }
+
+    .company-preview {
+        margin-top: 20px;
+        padding: 15px;
+        border: 1px dashed #ccc;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .preview-logo {
+        width: 48px;
+        height: 48px;
+        background: #111;
+        color: #fff;
+        font-weight: bold;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 6px;
+        letter-spacing: 1px;
+    }
+</style>
+
+<div class="company-container">
+    <h2>🏪 Company Name Settings</h2>
+
+    <form method="post">
+        {% csrf_token %}
+
+        <label>Company Name</label>
+        {{ form.company_name }}
+
+        <label>Short Name (MM)</label>
+        {{ form.short_name }}
+
+        <label>Print Name (optional)</label>
+        {{ form.print_name }}
+
+        <button type="submit">Save</button>
+    </form>
+
+    {% if company %}
+    <div class="company-preview">
+        <div class="preview-logo">
+            {{ company.short_name }}
+        </div>
+        <strong>
+            {{ company.print_name|default:company.company_name }}
+        </strong>
+    </div>
+    {% endif %}
+</div>
+
+{% endblock %}

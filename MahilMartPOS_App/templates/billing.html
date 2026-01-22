@@ -89,7 +89,7 @@ body {
     gap: 16px;
 }
 
-.store-logo {
+.store-logo-text {
     width: 50px;
     height: 50px;
     background: linear-gradient(135deg, var(--primary-blue), var(--primary-dark));
@@ -815,11 +815,15 @@ body {
     <!-- Header -->
     <div class="counter-header">
         <div class="store-brand">
-            <div class="store-logo">MM</div>
+            <div class="store-logo-text">
+                {{ company.short_name }}
+            </div>
+
             <div class="store-info">
-                <h1>SUPERMART BILLING</h1>
+                <h1>{{ company.print_name|default:company.company_name }}</h1>
                 <p>Point of Sale System • Counter = {{ current_counter_name }}</p>
             </div>
+
         </div>
         <div class="bill-info">
             <div class="bill-meta">
@@ -839,24 +843,57 @@ body {
         <div class="customer-section">
             <form id="billingForm" method="post" class="customer-form">
                 {% csrf_token %}
+
+                <!-- ===============================
+                    REQUIRED HIDDEN FIELDS
+                    =============================== -->
                 <input type="hidden" id="itemDataField" name="item_data">
-                
+
+                <!-- Business type: retail / medical / book -->
+                <input type="hidden" id="business_type" name="business_type"
+                    value="{{ business_type|default:'retail' }}">
+
+                <!-- Selected batch for medical items -->
+                <input type="hidden" id="selected_batch_no" name="selected_batch_no">
+
+                <!-- Prescription requirement flag -->
+                <input type="hidden" id="requires_prescription" value="false">
+
+                <!-- ===============================
+                    CUSTOMER INPUTS
+                    =============================== -->
                 <div class="form-group">
                     <label for="cell">PHONE *</label>
-                    <input type="tel" id="cell" name="cell" pattern="[6-9][0-9]{9}" maxlength="10" required 
-                           placeholder="Enter mobile number">
+                    <input
+                        type="tel"
+                        id="cell"
+                        name="cell"
+                        pattern="[6-9][0-9]{9}"
+                        maxlength="10"
+                        required
+                        placeholder="Enter mobile number">
                 </div>
-                
+
                 <div class="form-group">
                     <label for="name">CUSTOMER NAME</label>
-                    <input type="text" id="name" name="name" placeholder="Customer name" readonly>
+                    <input
+                        type="text"
+                        id="name"
+                        name="name"
+                        placeholder="Customer name"
+                        readonly>
                 </div>
-                
+
                 <div class="form-group">
                     <label for="address">ADDRESS</label>
-                    <input type="text" id="address" name="address" placeholder="Customer address" readonly>
+                    <input
+                        type="text"
+                        id="address"
+                        name="address"
+                        placeholder="Customer address"
+                        readonly>
                 </div>
-                
+
                 <div class="form-group">
                     <label for="bill_type">BILL TYPE</label>
                     <select id="bill_type" name="bill_type" class="form-control">
@@ -866,13 +903,21 @@ body {
                         <option value="Credit">Credit</option>
                     </select>
                 </div>
+
+                <!-- ===============================
+                    CUSTOMER PREVIEW (OPTIONAL)
+                    =============================== -->
+                <!--
+                <div id="customerPreview"
+                    class="customer-preview"
+                    style="display: none;">
+                    Customer details will appear here
+                </div>
+                -->
+
             
-            
-            <!-- Customer Preview -->
-            <!-- <div id="customerPreview" class="customer-preview" style="display: none;">
-                Customer details will appear here
-            </div> -->
-        </div>
+    </div>
+
 
         <!-- Items Table -->
         <div class="items-section">

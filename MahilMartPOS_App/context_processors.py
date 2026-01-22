@@ -1,40 +1,41 @@
-from .models import AdminSettings, CashierPermission, SupervisorPermission
-from .models import CashierPermission, SupervisorPermission
+from .models import (
+    AdminSettings,
+    CashierPermission,
+    SupervisorPermission,
+    CompanyDetails,
+)
 
+
+# =====================================================
+# USER PERMISSIONS (optional standalone)
+# =====================================================
 def user_permissions(request):
-    # If the user is not logged in → don't query the DB
     if not request.user.is_authenticated:
         return {"perm": None}
 
-    # Import models locally (prevents circular import issues)
-    from .models import SupervisorPermission, CashierPermission
-
     user = request.user
 
-    # Superuser always bypasses permissions
     if user.is_superuser:
         return {"perm": None}
 
-    # Staff → Supervisor permissions
     if user.is_staff:
-        perm = SupervisorPermission.objects.filter(user_id=user.id).first()
+        perm = SupervisorPermission.objects.filter(user=user).first()
     else:
-        # Normal user → Cashier permissions
-        perm = CashierPermission.objects.filter(user_id=user.id).first()
+        perm = CashierPermission.objects.filter(user=user).first()
 
     return {"perm": perm}
 
 
-
+# =====================================================
+# BASE CONTEXT (theme + permissions)
+# =====================================================
 def base_context(request):
     theme = AdminSettings.objects.first()
-
     user = request.user
     perm = None
 
     if user.is_authenticated:
 
-        # Superadmin always full permission
         if user.is_superuser:
             class FullPerm:
                 allow_dashboard = True
@@ -56,15 +57,12 @@ def base_context(request):
                 allow_settings = True
             perm = FullPerm()
 
-        # Supervisor
         elif user.is_staff:
             perm = SupervisorPermission.objects.filter(user=user).first()
 
-        # Cashier
         else:
             perm = CashierPermission.objects.filter(user=user).first()
 
-    # No permission found → dummy all false
     if perm is None:
         class DummyPerm:
             allow_dashboard = False
@@ -89,4 +87,25 @@ def base_context(request):
     return {
         "theme": theme,
         "perm": perm,
+    }
+
+
+# =====================================================
+# COMPANY CONTEXT (GLOBAL STORE NAME)
+# =====================================================
+def company_context(request):
+    company = CompanyDetails.objects.first()
+
+    return {
+        "company_name": (
+            company.print_name
+            if company and company.print_name
+            else company.company_name
+            if company else "MY STORE"
+        ),
+        "company_short_name": (
+            company.short_name
+            if company and company.short_name
+            else "MM"
+        ),
     }

@@ -296,3 +296,31 @@ class BarcodeLabelSizeForm(forms.ModelForm):
     class Meta:
         model = BarcodeLabelSize
         fields = ["name", "width_mm", "height_mm", "per_row", "per_column"]
+
+
+
+from django import forms
+from .models import CompanyDetails
+
+
+class CompanyNameForm(forms.ModelForm):
+    class Meta:
+        model = CompanyDetails
+        fields = ["company_name", "short_name", "print_name"]
+
+        widgets = {
+            "company_name": forms.TextInput(attrs={
+                "class": "form-control",
+                "placeholder": "Enter Company Name"
+            }),
+            "short_name": forms.TextInput(attrs={
+                "class": "form-control",
+                "placeholder": "MM",
+                "maxlength": 5
+            }),
+            "print_name": forms.TextInput(attrs={
+                "class": "form-control",
+                "placeholder": "Optional Print Name"
+            }),
+        }
+        

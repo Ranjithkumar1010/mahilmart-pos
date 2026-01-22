@@ -520,45 +520,107 @@ class CustomUserManager(BaseUserManager):
         user.save(using=self._db)
         return user
     
+from django.db import models
+
+from django.db import models
+
+
 class CompanyDetails(models.Model):
+
+    # ==========================
+    # ✅ BUSINESS TYPE
+    # ==========================
+    business_type = models.ForeignKey(
+        'BusinessType',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="companies"
+    )
+
+    # ==========================
+    # COMPANY INFO
+    # ==========================
+    short_name = models.CharField(
+        max_length=5,
+        help_text="Short store code like MM"
+    )
+
     company_name = models.CharField(max_length=255)
     print_name = models.CharField(max_length=255, blank=True, null=True)
     address = models.CharField(max_length=255, blank=True, null=True)
     pincode = models.CharField(max_length=20)
     state = models.CharField(max_length=100)
     country = models.CharField(max_length=100)
+
     phone = models.CharField(max_length=20)
     mobile = models.CharField(max_length=20)
     email = models.EmailField()
     website = models.CharField(max_length=255, blank=True, null=True)
+
+    # ==========================
+    # TAX & LICENSE
+    # ==========================
     gstin = models.CharField(max_length=20)
     gst_type = models.CharField(max_length=50)
     pan_no = models.CharField(max_length=20)
     fssai_no = models.CharField(max_length=20)
     trade_license_no = models.CharField(max_length=50)
+
+    # ==========================
+    # INVOICE SETTINGS
+    # ==========================
     invoice_prefix = models.CharField(max_length=10)
     invoice_start_num = models.IntegerField(null=True, blank=True)
-    default_tax_rate = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    default_tax_rate = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True
+    )
+
+    # ==========================
+    # BANK DETAILS
+    # ==========================
     bank_name = models.CharField(max_length=255)
     account_no = models.CharField(max_length=50)
     ifsc_code = models.CharField(max_length=20)
+
+    # ==========================
+    # FINANCIAL YEAR
+    # ==========================
     year_from = models.DateField(null=True, blank=True)
     year_to = models.DateField(null=True, blank=True)
+
+    # ==========================
+    # SYSTEM SETTINGS
+    # ==========================
     auto_backup = models.BooleanField(default=False)
     daily_backup_path = models.CharField(max_length=255, blank=True, null=True)
     printer_name = models.CharField(max_length=255, blank=True, null=True)
     auto_logout_minutes = models.IntegerField(default=0)
-    password_hash = models.CharField(max_length=255)
+
+    # ==========================
+    # TIMING
+    # ==========================
     opening_time = models.TimeField()
     closing_time = models.TimeField()
-    is_sunday_open = models.CharField(max_length=10,choices=[('Open', 'Open'), ('Closed', 'Closed')])
+    is_sunday_open = models.CharField(
+        max_length=10,
+        choices=[('Open', 'Open'), ('Closed', 'Closed')]
+    )
+
+    # ==========================
+    # ADMIN SECURITY
+    # ==========================
     admin_password = models.CharField(max_length=255, blank=True, null=True)
     confirm_password = models.CharField(max_length=255, blank=True, null=True)
     password_hash = models.CharField(max_length=255, blank=True, null=True)
 
     def __str__(self):
-        return self.company_name
-       
+        bt = self.business_type.name if self.business_type else "Retail"
+        return f"{self.company_name} ({bt})"
+
 # purchase & purchase items
 class Purchase(models.Model):
     supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE)   
@@ -937,4 +999,73 @@ class ActivityLog(models.Model):
         
 
 
+
+class BusinessType(models.Model):
+    BUSINESS_CHOICES = [
+        ('retail', 'Retail'),
+        ('medical', 'Medical Shop'),
+        ('book', 'Book Stall'),
+    ]
+
+    name = models.CharField(max_length=20, choices=BUSINESS_CHOICES, unique=True)
+    is_active = models.BooleanField(default=True)
+
+    def __str__(self):
+        return self.name
+    
+
+class Medicine(models.Model):
+    item = models.OneToOneField(Item, on_delete=models.CASCADE)
+    salt_composition = models.CharField(max_length=255)
+    manufacturer = models.CharField(max_length=255)
+    schedule_type = models.CharField(
+        max_length=10,
+        choices=[
+            ('OTC', 'OTC'),
+            ('H', 'Schedule H'),
+            ('H1', 'Schedule H1'),
+            ('X', 'Schedule X')
+        ]
+    )
+    prescription_required = models.BooleanField(default=False)
+
+    def __str__(self):
+        return self.item.item_name
+
+
+class MedicineBatch(models.Model):
+    item = models.ForeignKey(Item, on_delete=models.CASCADE)
+    batch_no = models.CharField(max_length=100)
+    expiry_date = models.DateField()
+    mrp = models.DecimalField(max_digits=10, decimal_places=2)
+    purchase_price = models.DecimalField(max_digits=10, decimal_places=2)
+    quantity = models.DecimalField(max_digits=10, decimal_places=2)
+
+    def is_expired(self):
+        return self.expiry_date < timezone.now().date()
+
+    def __str__(self):
+        return f"{self.item.item_name} - {self.batch_no}"
+
+
+class Prescription(models.Model):
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE)
+    doctor_name = models.CharField(max_length=255)
+    prescription_date = models.DateField()
+    file = models.FileField(upload_to='prescriptions/', blank=True, null=True)
+
+    def __str__(self):
+        return f"{self.customer.name} - {self.doctor_name}"
+
+
+class Book(models.Model):
+    item = models.OneToOneField(Item, on_delete=models.CASCADE)
+    author = models.CharField(max_length=255)
+    publisher = models.CharField(max_length=255)
+    isbn = models.CharField(max_length=20, unique=True)
+    edition = models.CharField(max_length=50)
+    subject = models.CharField(max_length=100)
+
+    def __str__(self):
+        return self.item.item_name
 

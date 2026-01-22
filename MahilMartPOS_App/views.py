@@ -832,6 +832,31 @@ def allow_dashboard(view_func):
 
     return wrapper
 
+from django.shortcuts import render, redirect
+from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+
+from .models import CompanyDetails
+from .forms import CompanyNameForm
+
+@allow_settings
+
+def company_name_settings_view(request):
+    company = CompanyDetails.objects.first()
+
+    if request.method == "POST":
+        form = CompanyNameForm(request.POST, instance=company)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "✅ Company details saved successfully")
+            return redirect("company_name_settings")
+    else:
+        form = CompanyNameForm(instance=company)
+
+    return render(request, "company_name_settings.html", {
+        "form": form,
+        "company": company
+    })
 
     
 @allow_dashboard
@@ -1408,13 +1433,32 @@ def sales_chart_data(request):
 
 
 
+from django.shortcuts import render, redirect
+from django.http import JsonResponse
+from django.contrib import messages
+from django.db import transaction
+from django.utils import timezone
+from django.contrib.auth.decorators import login_required
+from types import SimpleNamespace
+import json
+
+from MahilMartPOS_App.models import (
+    Customer, Billing, BillingItem, Inventory,
+    BillType, PaymentMode, Counter,
+    PointsConfig, BillingConfig,
+    CompanyDetails, LoginLog, ComputerAlias
+)
+
+from .decorators import allow_billing
+
+
 @allow_billing
 @login_required
 def create_invoice_view(request):
 
-    # ----------------------------------------------------------------------
-    # AJAX: Fetch customer by phone (POINTS FROM CUSTOMER MASTER)
-    # ----------------------------------------------------------------------
+    # ==========================================================
+    # AJAX: Fetch customer by phone
+    # ==========================================================
     if request.method == 'GET' and request.headers.get('x-requested-with') == 'XMLHttpRequest':
         phone = request.GET.get('phone')
         customer = Customer.objects.filter(cell=phone).first()
@@ -1428,16 +1472,26 @@ def create_invoice_view(request):
             'remarks': '',
         })
 
-    # ----------------------------------------------------------------------
+    # ==========================================================
     # POST: Save invoice
-    # ----------------------------------------------------------------------
+    # ==========================================================
     if request.method == 'POST':
         try:
             with transaction.atomic():
 
-                # ==========================================================
+                # ------------------------------
+                # COMPANY & BUSINESS TYPE
+                # ------------------------------
+                company_obj = CompanyDetails.objects.first()
+                business_type = (
+                    company_obj.business_type.name
+                    if company_obj and company_obj.business_type
+                    else "retail"
+                )
+
+                # ------------------------------
                 # CUSTOMER
-                # ==========================================================
+                # ------------------------------
                 cell = (request.POST.get('cell') or '').strip()
                 name = (request.POST.get('name') or '').strip()
                 email = (request.POST.get('email') or '').strip()
@@ -1462,9 +1516,9 @@ def create_invoice_view(request):
 
                 customer.save()
 
-                # ==========================================================
+                # ------------------------------
                 # BILL NUMBER
-                # ==========================================================
+                # ------------------------------
                 latest = Billing.objects.order_by('-id').first()
                 bill_no = (
                     str(int(latest.bill_no) + 1)
@@ -1472,28 +1526,31 @@ def create_invoice_view(request):
                     else "1"
                 )
 
-                # ==========================================================
-                # POINTS (SINGLE SOURCE OF TRUTH = FRONTEND)
-                # ==========================================================
+                # ------------------------------
+                # POINTS
+                # ------------------------------
                 old_points = float(customer.total_points or 0)
                 today_points = float(request.POST.get('total_earned') or 0)
                 new_total_points = old_points + today_points
 
-                # ==========================================================
-                # PAYMENTS
-                # ==========================================================
-                cash = float(request.POST.get('cash_amount') or 0)
-                card = float(request.POST.get('card_amount') or 0)
-
+                # ------------------------------
+                # ITEMS & DISCOUNT
+                # ------------------------------
                 items = json.loads(request.POST.get('item_data', '[]'))
                 total_sale_amount = sum(float(i.get('amount') or 0) for i in items)
 
                 discount_percent = float(request.POST.get('discount') or 0)
                 discount_amt = total_sale_amount * discount_percent / 100
 
-                # ==========================================================
-                # CREATE BILLING (POINT SNAPSHOT)
-                # ==========================================================
+                # ------------------------------
+                # PAYMENTS
+                # ------------------------------
+                cash = float(request.POST.get('cash_amount') or 0)
+                card = float(request.POST.get('card_amount') or 0)
+
+                # ------------------------------
+                # CREATE BILLING
+                # ------------------------------
                 billing = Billing.objects.create(
                     customer=customer,
                     to=request.POST.get('to'),
@@ -1509,49 +1566,47 @@ def create_invoice_view(request):
                     balance=max(float(request.POST.get('balance') or 0), 0),
                     discount=discount_percent,
                     discount_amt=discount_amt,
-                    points=new_total_points,        # ✅ total after bill
-                    points_earned=today_points,     # ✅ today only
+                    points=new_total_points,
+                    points_earned=today_points,
                     remarks=request.POST.get('remarks', ''),
                     status_on="counter_bill",
                     created_by=request.user,
                 )
 
-                # ==========================================================
-                # BILL ITEMS + FIFO STOCK
-                # ==========================================================
-                codes = request.POST.getlist('code')
-                item_names = request.POST.getlist('item_name')
-                units = request.POST.getlist('unit')
-                qtys = request.POST.getlist('qty')
-                mrsps = request.POST.getlist('mrsp')
-                selling_prices = request.POST.getlist('sellingprice')
-
-                for i in range(len(item_names)):
-                    if not any([
-                        (codes[i] or '').strip(),
-                        (item_names[i] or '').strip(),
-                        (qtys[i] or '').strip(),
-                        (selling_prices[i] or '').strip()
-                    ]):
-                        continue
-
-                    qty = float(qtys[i])
-                    mrp = float(mrsps[i] or 0)
-                    selling_price = float(selling_prices[i] or 0)
+                # ------------------------------
+                # FIFO STOCK (BUSINESS AWARE)
+                # ------------------------------
+                for row in items:
+                    code = row.get('code')
+                    item_name = row.get('item_name')
+                    unit = row.get('unit')
+                    qty = float(row.get('qty') or 0)
+                    mrp = float(row.get('mrsp') or 0)
+                    selling_price = float(row.get('sellingprice') or 0)
                     amount = qty * selling_price
 
                     remaining_qty = qty
 
-                    inventory_items = Inventory.objects.filter(
-                        code=codes[i],
+                    inventory_qs = Inventory.objects.filter(
+                        code=code,
+                        status="in_stock",
                         quantity__gt=0
-                    ).order_by('purchased_at', 'id')
+                    )
 
-                    for inv in inventory_items:
+                    if business_type == "medical":
+                        inventory_qs = inventory_qs.exclude(
+                            expiry_date__lt=timezone.now().date()
+                        )
+
+                    inventory_qs = inventory_qs.order_by('purchased_at', 'id')
+
+                    for inv in inventory_qs:
                         if remaining_qty <= 0:
                             break
 
-                        if "bulk" in (inv.unit or '').lower():
+                        is_bulk = "bulk" in (inv.unit or '').lower()
+
+                        if is_bulk:
                             available = inv.split_unit or 0
                             deduct = min(available, remaining_qty)
                             inv.split_unit -= deduct
@@ -1568,23 +1623,23 @@ def create_invoice_view(request):
                         remaining_qty -= deduct
 
                     if remaining_qty > 0:
-                        raise ValueError(f"Insufficient stock for {item_names[i]}")
+                        raise ValueError(f"Insufficient stock for {item_name}")
 
                     BillingItem.objects.create(
                         billing=billing,
                         customer=customer,
-                        code=codes[i],
-                        item_name=item_names[i],
-                        unit=units[i],
+                        code=code,
+                        item_name=item_name,
+                        unit=unit,
                         qty=qty,
                         mrp=mrp,
                         selling_price=selling_price,
                         amount=amount
                     )
 
-                # ==========================================================
-                # UPDATE CUSTOMER MASTER POINTS (FINAL)
-                # ==========================================================
+                # ------------------------------
+                # UPDATE CUSTOMER POINTS
+                # ------------------------------
                 customer.total_points = new_total_points
                 customer.save(update_fields=["total_points"])
 
@@ -1595,15 +1650,16 @@ def create_invoice_view(request):
             print("[ERROR] Invoice creation failed:", e)
             messages.error(request, "Something went wrong while saving the invoice.")
 
-    # ----------------------------------------------------------------------
-    # GET: Render page
-    # ----------------------------------------------------------------------
+    # ==========================================================
+    # GET: Render billing page
+    # ==========================================================
     latest_bill = Billing.objects.order_by('-id').first()
     next_bill_no = (
         str(int(latest_bill.bill_no) + 1)
         if latest_bill and str(latest_bill.bill_no).isdigit()
         else '1'
     )
+
     today_date = timezone.now().strftime('%Y-%m-%d')
 
     bill_types = BillType.objects.all().order_by('billtype_id')
@@ -1611,10 +1667,17 @@ def create_invoice_view(request):
     counters = Counter.objects.all().order_by('counter_id')
 
     company_obj = CompanyDetails.objects.first()
+    business_type = (
+        company_obj.business_type.name
+        if company_obj and company_obj.business_type
+        else "retail"
+    )
 
+    # ✅ COMPANY DATA (TEXT-BASED BRANDING ONLY)
     company = SimpleNamespace(
-        print_name=company_obj.print_name if company_obj and company_obj.print_name else None,
+        short_name=company_obj.short_name if company_obj and company_obj.short_name else "MM",
         company_name=company_obj.company_name if company_obj else "MY STORE",
+        print_name=company_obj.print_name if company_obj and company_obj.print_name else None,
         address=company_obj.address if company_obj else "",
         gstin=company_obj.gstin if company_obj else "",
         mobile=company_obj.mobile if company_obj else "",
@@ -1640,23 +1703,31 @@ def create_invoice_view(request):
         'payment_modes': payment_modes,
         'counter': counters,
         'company': company,
+        'business_type': business_type,
         'amount_for_one_point': amount_for_one_point,
         'enable_gst': enable_gst,
         'current_counter_name': current_counter_name,
     })
 
 
+
+from decimal import Decimal
+from django.http import JsonResponse
+from django.utils import timezone
+
 @allow_billing
 def get_item_info(request):
     code = request.GET.get('code', '').strip()
     name = request.GET.get('name', '').strip()
 
-    # Step 1: Find the item
+    # --------------------------------------------------
+    # STEP 1: FIND ITEM
+    # --------------------------------------------------
     item = None
+
     if code:
-        item = Item.objects.filter(code__iexact=code).first()        
+        item = Item.objects.filter(code__iexact=code).first()
         if not item:
-            # fallback to barcode
             item = Item.objects.filter(barcode__iexact=code).first()
     elif name:
         item = Item.objects.filter(item_name__icontains=name).first()
@@ -1664,20 +1735,28 @@ def get_item_info(request):
     if not item:
         return JsonResponse({'error': 'Item not found'}, status=404)
 
-    is_bulk = 'bulk' in item.unit.lower()
+    unit_name = item.unit or ""
+    is_bulk = "bulk" in unit_name.lower()
 
-    # Step 2: Get inventory in FIFO order
+    # --------------------------------------------------
+    # STEP 2: FIFO INVENTORY (NON-EXPIRED ONLY)
+    # --------------------------------------------------
     inventory_qs = Inventory.objects.filter(
         code=item.code,
-        status="in_stock"
+        status="in_stock",
+        quantity__gt=0
+    ).exclude(
+        expiry_date__lt=timezone.now().date()
     ).order_by('purchased_at', 'batch_no', 'id')
 
     if not inventory_qs.exists():
         return JsonResponse({
             'item_name': item.item_name,
             'item_code': item.code,
-            'unit': item.unit,
+            'unit': unit_name,
             'is_bulk': is_bulk,
+            'current_mrp': 0,
+            'tax': float(item.tax or 0),
             'total_available': 0,
             'low_stock_warning': True,
             'warning_message': "⚠️ No stock available",
@@ -1685,201 +1764,172 @@ def get_item_info(request):
             'all_batch_nos': []
         })
 
-    # Step 3: Find the first MRP available (FIFO)
+    # --------------------------------------------------
+    # STEP 3: FIRST FIFO MRP
+    # --------------------------------------------------
     current_mrp = round(float(inventory_qs.first().mrp_price or 0), 2)
 
-    total_available = 0
+    total_available = Decimal("0")
     low_stock_batches = []
     merged_batches = []
     all_batch_nos = []
 
-    # Step 4: Loop and only process batches with the same MRP
+    # --------------------------------------------------
+    # STEP 4: PROCESS SAME-MRP BATCHES ONLY
+    # --------------------------------------------------
     for inv in inventory_qs:
         batch_mrp = round(float(inv.mrp_price or 0), 2)
         if batch_mrp != current_mrp:
-            break  # stop when MRP changes (FIFO)
+            break
 
-        available = inv.split_unit if is_bulk else inv.quantity
-        available = available or Decimal('0')
+        available = Decimal(inv.split_unit if is_bulk else inv.quantity or 0)
 
         total_available += available
         all_batch_nos.append(inv.batch_no)
 
-        current_row = {
-            'batch_no': inv.batch_no,
-            'available_qty': float(available),
-            'mrp': batch_mrp,
-            'split_sale_price': round(float(inv.sale_price or 0), 2),
-            'purchased_at': inv.purchased_at.strftime('%Y-%m-%d'),
-            'status': inv.status,
+        row = {
+            "batch_no": inv.batch_no,
+            "available_qty": float(available),
+            "mrp": batch_mrp,
+            "split_sale_price": round(float(inv.sale_price or 0), 2),
+            "purchased_at": inv.purchased_at.strftime("%Y-%m-%d") if inv.purchased_at else "",
+            "status": inv.status,
         }
 
-        # Merge if last batch has same MRP
-        if merged_batches and merged_batches[-1]['mrp'] == batch_mrp:
-            merged_batches[-1]['available_qty'] += current_row['available_qty']
-            merged_batches[-1]['batch_no'] += f", {current_row['batch_no']}"
+        # Merge rows with same MRP
+        if merged_batches and merged_batches[-1]["mrp"] == batch_mrp:
+            merged_batches[-1]["available_qty"] += row["available_qty"]
+            merged_batches[-1]["batch_no"] += f", {row['batch_no']}"
         else:
-            merged_batches.append(current_row)
+            merged_batches.append(row)
 
-        # if available < 10:
-        #     low_stock_batches.append(inv.batch_no)
-
-        # Track low stock ONLY for this batch
         if available < 10:
-            low_stock_batches.append(f"{inv.batch_no} (qty: {available})")            
+            low_stock_batches.append(f"{inv.batch_no} (qty: {available})")
 
-    # Step 5: Round quantities
+    # --------------------------------------------------
+    # STEP 5: ROUND
+    # --------------------------------------------------
     for batch in merged_batches:
-        batch['available_qty'] = round(batch['available_qty'], 2)
+        batch["available_qty"] = round(batch["available_qty"], 2)
 
-    # Step 6: Set warnings
-    low_stock_warning = bool(low_stock_batches)
+    # --------------------------------------------------
+    # STEP 6: WARNINGS
+    # --------------------------------------------------
     if total_available == 0:
         warning_message = "⚠️ No stock available"
-    # elif low_stock_warning:
-    #     warning_message = f"⚠️ Low stock in batch(es): {', '.join(low_stock_batches)}, available qty: {round(total_available, 2)}"
     elif low_stock_batches:
         warning_message = f"⚠️ Low stock in batch(es): {', '.join(low_stock_batches)}"
     else:
         warning_message = ""
 
-    
-    # Debugging tax
-    print("DEBUG - Item:", item.code, item.item_name, "Tax:", item.tax)        
-
     return JsonResponse({
-        'item_name': item.item_name,
-        'item_code': item.code,
-        'unit': item.unit,
-        'is_bulk': is_bulk,
-        'current_mrp': current_mrp,
-        'tax': float(item.tax or 0),
-        'total_available': round(total_available, 2),
-        'low_stock_warning': low_stock_warning,
-        'warning_message': warning_message,
-        'batch_details': merged_batches,
-        'all_batch_nos': all_batch_nos
+        "item_name": item.item_name,
+        "item_code": item.code,
+        "unit": unit_name,
+        "is_bulk": is_bulk,
+        "current_mrp": current_mrp,
+        "tax": float(item.tax or 0),
+        "total_available": round(float(total_available), 2),
+        "low_stock_warning": bool(low_stock_batches),
+        "warning_message": warning_message,
+        "batch_details": merged_batches,
+        "all_batch_nos": all_batch_nos,
     })
+
+
 @allow_billing
 def get_itemname_info(request):
-    """
-    Return item name/code suggestions for autocomplete.
-    """
     query = request.GET.get('q', '').strip()
     if not query:
         return JsonResponse({'suggestions': []})
 
-    items = Item.objects.filter(item_name__icontains=query).order_by("item_name")[:25]
+    items = Item.objects.filter(
+        item_name__icontains=query
+    ).order_by("item_name")[:25]
 
-    suggestions = [
-        {
-            'item_code': i.code,
-            'item_name': i.item_name,
-            'unit': i.unit,
-        }
-        for i in items
-    ]
+    return JsonResponse({
+        "suggestions": [
+            {
+                "item_code": i.code,
+                "item_name": i.item_name,
+                "unit": i.unit,
+            }
+            for i in items
+        ]
+    })
 
-    return JsonResponse({'suggestions': suggestions})
 
 @allow_config_view
 def add_billtype(request):
 
     # -----------------------------
-    # Auto ID helper functions
+    # AUTO ID HELPERS
     # -----------------------------
-    def get_next_billtype_id():
-        existing = BillType.objects.values_list("billtype_id", flat=True).order_by("billtype_id")
+    def auto_id(qs):
         n = 1
-        for i in existing:
+        for i in qs:
             if i != n:
                 break
             n += 1
         return n
 
-    def get_next_mode_id():
-        existing = PaymentMode.objects.values_list("mode_id", flat=True).order_by("mode_id")
-        n = 1
-        for i in existing:
-            if i != n:
-                break
-            n += 1
-        return n
-
-    def get_next_counter_id():
-        existing = Counter.objects.values_list("counter_id", flat=True).order_by("counter_id")
-        n = 1
-        for i in existing:
-            if i != n:
-                break
-            n += 1
-        return n
-
-    # -----------------------------
-    # INITIAL EMPTY FORMS
-    # -----------------------------
     billtype_form = BillTypeForm()
     paymentmode_form = PaymentModeForm()
     counter_form = CounterForm()
+
     points_config = PointsConfig.objects.first()
     points_form = PointsConfigForm(instance=points_config)
 
-    # -----------------------------
-    # PREFILL AUTO-ID VALUES
-    # -----------------------------
-    billtype_form.initial["billtype_id"] = get_next_billtype_id()
-    paymentmode_form.initial["mode_id"] = get_next_mode_id()
-    counter_form.initial["counter_id"] = get_next_counter_id()
+    billtype_form.initial["billtype_id"] = auto_id(
+        BillType.objects.values_list("billtype_id", flat=True).order_by("billtype_id")
+    )
+
+    paymentmode_form.initial["mode_id"] = auto_id(
+        PaymentMode.objects.values_list("mode_id", flat=True).order_by("mode_id")
+    )
+
+    counter_form.initial["counter_id"] = auto_id(
+        Counter.objects.values_list("counter_id", flat=True).order_by("counter_id")
+    )
 
     # -----------------------------
-    # HANDLE POST REQUESTS
+    # POST HANDLING
     # -----------------------------
     if request.method == "POST":
 
-        # Save Bill Type
         if "save_billtype" in request.POST:
             form = BillTypeForm(request.POST)
             if form.is_valid():
                 form.save()
                 return redirect("add")
 
-        # Save Payment Mode
         elif "save_paymentmode" in request.POST:
             form = PaymentModeForm(request.POST)
             if form.is_valid():
                 form.save()
                 return redirect("add")
 
-        # Save Counter
         elif "save_counter" in request.POST:
             form = CounterForm(request.POST)
             if form.is_valid():
                 form.save()
                 return redirect("add")
 
-        # Save Points Config
         elif "save_points" in request.POST:
             form = PointsConfigForm(request.POST)
             if form.is_valid():
                 form.save()
                 return redirect("add")
 
-        # Save Billing Config
         elif "save_billing_config" in request.POST:
-            billing_config, created = BillingConfig.objects.get_or_create(id=1)
+            billing_config, _ = BillingConfig.objects.get_or_create(id=1)
             form = BillingConfigForm(request.POST, instance=billing_config)
             if form.is_valid():
                 form.save()
                 return redirect("add")
 
-    # -----------------------------
-    # BILLING CONFIG (ALWAYS LOAD)
-    # -----------------------------
     billing_config, _ = BillingConfig.objects.get_or_create(id=1)
 
-    # -----------------------------
-    # RENDER TEMPLATE
-    # -----------------------------
     return render(request, "add_billtype.html", {
         "billtype_form": billtype_form,
         "paymentmode_form": paymentmode_form,
@@ -1887,6 +1937,7 @@ def add_billtype(request):
         "points_form": points_form,
         "config": billing_config,
     })
+
 
 @allow_payments
 def order_payments(request, order_id):

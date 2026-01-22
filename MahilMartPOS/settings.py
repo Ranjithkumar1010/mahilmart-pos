@@ -69,6 +69,7 @@ TEMPLATES = [
                 'MahilMartPOS_App.context_processors.base_context',
                 'MahilMartPOS_App.context_processors.user_permissions',
                 # 'MahilMartPOS_App.context_processors.permission_context',
+                'MahilMartPOS_App.context_processors.company_context',
             ],
         },
     },
