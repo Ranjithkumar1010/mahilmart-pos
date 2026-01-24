@@ -212,6 +212,10 @@ body {
     flex-direction: column;
     overflow: hidden;
 }
+.items-table td:nth-child(1) .table-input {
+    text-align: center;
+    font-weight: 700;
+}
 
 .items-section-header {
     background: linear-gradient(to right, var(--primary-blue), var(--primary-dark));
@@ -946,7 +950,7 @@ body {
                     </thead>
                     <tbody id="itemTableBody">
                         <tr>
-                            <td><input type="number" name="sno" class="table-input" readonly></td>
+                            <td><input type="number" name="sno" class="table-input" value="1" readonly></td>
                             <td><input type="text" name="code" class="table-input" placeholder="Scan code"></td>
                             <td><input type="text" name="item_name" class="table-input" placeholder="Item name"></td>
                             <td><input type="text" name="unit" class="table-input"></td>
@@ -1145,26 +1149,32 @@ let prevRow = null; // Track previous row for delete operation
 const enableGST = '{{ enable_gst|yesno:"true,false" }}'.toLowerCase() === 'true';
 
 // Main initialization
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
     console.log("Initializing supermarket billing system");
-    
-    // Setup customer phone lookup with auto-trigger
+
+    /* ===============================
+       CUSTOMER AUTO LOOKUP
+    =============================== */
     setupCustomerLookup();
-    
-    // Initialize table and calculations
+
+    /* ===============================
+       TABLE + SERIAL NO + CALCULATIONS
+       (Handled internally)
+    =============================== */
     initializeTable();
-    
-    // Setup form submission
+
+    /* ===============================
+       FORM SUBMISSION
+    =============================== */
     const form = document.getElementById('billingForm');
     const saveBtn = document.getElementById('saveBtn');
-    
-    form.addEventListener('submit', function (e) {
-        e.preventDefault();
-        submitBilling();
-    });
-    
-    // Initial calculation
-    setTimeout(updateCalculations, 100);
+
+    if (form) {
+        form.addEventListener('submit', function (e) {
+            e.preventDefault();
+            submitBilling();
+        });
+    }
 });
 
 // ===============================
@@ -1925,7 +1935,7 @@ function initializeTable() {
         updateSerialNumbers();
         updateCalculations();          
     }
-}
+
 
 // ===============================
 // FORM VALIDATION FUNCTIONS

@@ -5,6 +5,8 @@
 Company Settings
 {% endblock %}
 
+
+
 {% block content %}
 
 <style>
@@ -154,7 +156,7 @@ Company Settings
         border: 1px solid #f1f5f9;
     }
 
-    .nav-item {
+    .nav-items {
         padding: 18px 24px;
         display: flex;
         align-items: center;
@@ -165,19 +167,19 @@ Company Settings
         border-left: 3px solid transparent;
     }
 
-    .nav-item:hover {
-        background: #f8fafc;
-        color: #475569;
+    .nav-items:hover {
+        background: #ffffff;
+        color: #838383;
     }
 
-    .nav-item.active {
+    .nav-items.active {
         background: #f8fafc;
         color: #6366f1;
         border-left-color: #6366f1;
         font-weight: 600;
     }
 
-    .nav-item i {
+    .nav-items i {
         width: 20px;
         text-align: center;
     }
@@ -772,22 +774,23 @@ Company Settings
                     <h2>Settings</h2>
                     <p>Manage your company profile and preferences</p>
                 </div>
-                <div class="sidebar-nav">
-                    <a href="{% url 'company_details' %}" class="nav-item active">
+                
+                <div class="sidebars-nav">
+                    <a href="{% url 'company_details' %}" class="nav-items active">
                         <i class="fas fa-building"></i>
                         <span>Company Profile</span>
                     </a>
-                    <a href="#" class="nav-item">
+                    <a href="#" class="nav-items">
                         <i class="fas fa-users"></i>
                         <span>Team Members</span>
                     </a>
-                    <a href="#" class="nav-item">
+                    <a href="#" class="nav-items">
                         <i class="fas fa-shield-alt"></i>
                         <span>Security</span>
                     </a>
                 </div>
             </aside>
-
+                
             <!-- Main Content -->
             <main class="main-content">
 
