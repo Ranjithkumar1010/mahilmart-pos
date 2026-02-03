@@ -215,6 +215,8 @@ body {
 .items-table td:nth-child(1) .table-input {
     text-align: center;
     font-weight: 700;
+    padding: 0;
+    min-width: 36px;
 }
 
 .items-section-header {
@@ -301,6 +303,7 @@ body {
     width: 100%;
     height: 40px; /* Increased from 36px */
     padding: 0 12px;
+    box-sizing: border-box;
     border: 2px solid var(--border-light);
     border-radius: var(--radius-md);
     font-size: 14px; /* Increased from 13px */
@@ -478,7 +481,7 @@ body {
 
 .sub-label {
     font-size: 10px;
-    color: var(--text-light);
+    color: var(--text-dark);
     text-transform: uppercase;
     display: block;
     margin-bottom: 4px;
@@ -1149,32 +1152,26 @@ let prevRow = null; // Track previous row for delete operation
 const enableGST = '{{ enable_gst|yesno:"true,false" }}'.toLowerCase() === 'true';
 
 // Main initialization
-document.addEventListener('DOMContentLoaded', function () {
+document.addEventListener('DOMContentLoaded', function() {
     console.log("Initializing supermarket billing system");
-
-    /* ===============================
-       CUSTOMER AUTO LOOKUP
-    =============================== */
+    
+    // Setup customer phone lookup with auto-trigger
     setupCustomerLookup();
-
-    /* ===============================
-       TABLE + SERIAL NO + CALCULATIONS
-       (Handled internally)
-    =============================== */
+    
+    // Initialize table and calculations
     initializeTable();
-
-    /* ===============================
-       FORM SUBMISSION
-    =============================== */
+    
+    // Setup form submission
     const form = document.getElementById('billingForm');
     const saveBtn = document.getElementById('saveBtn');
-
-    if (form) {
-        form.addEventListener('submit', function (e) {
-            e.preventDefault();
-            submitBilling();
-        });
-    }
+    
+    form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        submitBilling();
+    });
+    
+    // Initial calculation
+    setTimeout(updateCalculations, 100);
 });
 
 // ===============================
@@ -1780,6 +1777,14 @@ function initializeTable() {
         });
     }
 
+    // Auto reindex serial numbers on any row add/remove
+    if (itemTableBody) {
+        const tableObserver = new MutationObserver(() => {
+            updateSerialNumbers();
+        });
+        tableObserver.observe(itemTableBody, { childList: true });
+    }
+
     function attachAutoFill(row) {
         const codeInput = row.querySelector('input[name="code"]');
         const nameInput = row.querySelector('input[name="item_name"]');
@@ -1935,7 +1940,7 @@ function initializeTable() {
         updateSerialNumbers();
         updateCalculations();          
     }
-
+}
 
 // ===============================
 // FORM VALIDATION FUNCTIONS

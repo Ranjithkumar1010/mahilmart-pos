@@ -26,8 +26,8 @@ SECRET_KEY = 'django-insecure-m$j%wqpm)dqy8!erkd_^9hh#4-f29io_)_@zf&+68d1b81fc*)
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['192.168.0.105','127.0.0.1','192.168.0.123','192.168.1.132','192.168.0.128']
-# ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = ['*']  # LAN only; restrict this list if exposed to the internet
+# ALLOWED_HOSTS = ['192.168.0.105','127.0.0.1','192.168.0.123','192.168.0.165','192.168.0.128','192.168.1.130']
 
 # Application definition
 
@@ -90,7 +90,7 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'mmpos',
+        'NAME': 'mmpos2',
         'USER': 'postgres',
         'PASSWORD': 'admin@123',
         'HOST': 'localhost',
@@ -163,14 +163,16 @@ ADMINS = [
 ]
 
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_HOST = "smtp.gmail.com"
+
+# 🔐 Dummy defaults (will be overridden from DB)
+EMAIL_HOST = ""
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
+EMAIL_HOST_USER = ""
+EMAIL_HOST_PASSWORD = ""
 
-EMAIL_HOST_USER = "mahiltechlab.ops@gmail.com"
-EMAIL_HOST_PASSWORD = "zpibrqflppzfvkli"  # Don't expose publicly
+DEFAULT_FROM_EMAIL = ""
 
-DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
 from django.contrib.messages import constants as messages
 

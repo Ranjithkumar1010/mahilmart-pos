@@ -15,29 +15,57 @@ class Category(models.Model):
         return self.name
     
    
+from django.db import models
+from django.db.models import Max
+
+
 class Supplier(models.Model):
-    supplier_id = models.CharField(max_length=50, unique=True, null=True, blank=True)
+    supplier_id = models.CharField(
+        max_length=20,
+        unique=True,
+        editable=False
+    )
+
     name = models.CharField(max_length=100)
-    contact_person = models.CharField(max_length=100, blank=True, default="Unknown", null=True)
-    phone = models.CharField(max_length=15, default="0000000000", null=True)
-    email = models.EmailField(blank=True, default="unknown@example.com", null=True)
-    address = models.TextField(blank=True, default="N/A", null=True)
-    gst_number = models.CharField(max_length=20, blank=True, default="N/A", null=True)
-    fssai_number = models.CharField(max_length=20, blank=True, default="N/A", null=True)
-    pan_number = models.CharField(max_length=20, blank=True, default="N/A", null=True)
-    credit_terms = models.CharField(max_length=50, blank=True, default="N/A", null=True)
-    opening_balance = models.DecimalField(max_digits=10, decimal_places=2, default=0, null=True)
-    bank_name = models.CharField(max_length=100, blank=True, default="N/A", null=True)
-    account_number = models.CharField(max_length=50, blank=True, default="N/A", null=True)
-    ifsc_code = models.CharField(max_length=20, blank=True, default="N/A", null=True)
-    status = models.CharField(max_length=20, default='Active', null=True)
-    notes = models.TextField(blank=True, default="", null=True)
+    contact_person = models.CharField(max_length=100, blank=True, null=True, default="Unknown")
+    phone = models.CharField(max_length=15, blank=True, null=True, default="0000000000")
+    email = models.EmailField(blank=True, null=True, default="unknown@example.com")
+    address = models.TextField(blank=True, null=True, default="N/A")
+    gst_number = models.CharField(max_length=20, blank=True, null=True, default="N/A")
+    fssai_number = models.CharField(max_length=20, blank=True, null=True, default="N/A")
+    pan_number = models.CharField(max_length=20, blank=True, null=True, default="N/A")
+    credit_terms = models.CharField(max_length=50, blank=True, null=True, default="N/A")
+    opening_balance = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    bank_name = models.CharField(max_length=100, blank=True, null=True, default="N/A")
+    account_number = models.CharField(max_length=50, blank=True, null=True, default="N/A")
+    ifsc_code = models.CharField(max_length=20, blank=True, null=True, default="N/A")
+    status = models.CharField(max_length=20, default="Active")
+    notes = models.TextField(blank=True, null=True, default="")
 
     class Meta:
-        db_table = "MahilMartPOS_App_supplier"  # ⭐ FORCE EXACT PG TABLE NAME
+        db_table = "MahilMartPOS_App_supplier"
+        ordering = ["supplier_id"]
 
     def __str__(self):
-        return self.name
+        return f"{self.supplier_id} - {self.name}"
+
+    def save(self, *args, **kwargs):
+        if not self.supplier_id:
+            last_id = Supplier.objects.aggregate(
+                max_supplier_id=Max("supplier_id")
+            )["max_supplier_id"]
+
+            if last_id:
+                last_number = int(last_id.split("-")[1])
+                next_number = last_number + 1
+            else:
+                next_number = 1
+
+            self.supplier_id = f"SUP-{next_number:04d}"
+
+        super().save(*args, **kwargs)
+
+
         
     
 class Customer(models.Model):
@@ -364,6 +392,7 @@ class Group(models.Model):
         related_name="children"
     )
     print_name = models.CharField(max_length=100, blank=True, null=True)
+    is_active = models.BooleanField(default=True)
 
     def __str__(self):
         return self.group_name
@@ -1111,3 +1140,51 @@ class CompanyActivity(models.Model):
 
     def __str__(self):
         return f"{self.action} - {self.company.company_name}"
+
+
+
+
+
+
+class EmailConfig(models.Model):
+    email_host = models.CharField(max_length=200, default="smtp.gmail.com")
+    email_port = models.PositiveIntegerField(default=587)
+    use_tls = models.BooleanField(default=True)
+    email_host_user = models.EmailField()
+    email_host_password = models.CharField(max_length=255)
+    default_from_email = models.EmailField()
+    alert_recipients = models.CharField(max_length=500, blank=True, null=True)
+
+    is_active = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.email_host_user
+
+
+class EmailLog(models.Model):
+    STATUS_CHOICES = [
+        ("sent", "Sent"),
+        ("failed", "Failed"),
+    ]
+
+    EVENT_CHOICES = [
+        ("access_denied", "Access Denied"),
+        ("test", "Test Email"),
+        ("system", "System"),
+    ]
+
+    event_type = models.CharField(max_length=50, choices=EVENT_CHOICES, default="system")
+    subject = models.CharField(max_length=255)
+    recipients = models.TextField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="sent")
+    error_message = models.TextField(blank=True, null=True)
+    triggered_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True
+    )
+    request_path = models.CharField(max_length=255, blank=True, null=True)
+    ip_address = models.GenericIPAddressField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.event_type} - {self.subject} ({self.status})"

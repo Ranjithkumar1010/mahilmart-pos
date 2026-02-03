@@ -27,6 +27,7 @@
             --shadow-sm: 0 2px 8px rgba(0,0,0,0.08);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.12);
             --transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+            --header-height: 64px;
         }
 
         /* 🌙 DARK MODE STYLES (applied when body.dark-mode exists) */
@@ -66,8 +67,14 @@
         html, body {
             height: 100%;
             margin: 0;
-            overflow: hidden;
-            font-family: 'Segoe UI', 'Roboto', sans-serif;
+        }
+
+        body.app-layout {
+            min-height: 100vh;
+            margin: 0 !important;
+            overflow: hidden !important;
+            display: block !important;
+            font-family: 'Segoe UI', 'Roboto', sans-serif !important;
         }
         
        
@@ -75,7 +82,7 @@
 
         .app-container {
             display: flex;
-            height: calc(100vh - 70px);
+            height: calc(100vh - var(--header-height));
             overflow: hidden;
         }
 
@@ -83,7 +90,8 @@
         .app-header {
             background-color: var(--primary);
             color: var(--text-light);
-            padding: 0.75rem 1.5rem;
+            height: var(--header-height);
+            padding: 0 1.5rem;
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -91,6 +99,7 @@
             position: relative;
             z-index: 100;
             border-bottom: 1px solid rgba(255,255,255,0.1);
+            box-sizing: border-box;
         }
 
         .app-header strong {
@@ -187,6 +196,48 @@
             opacity: 1;
         }
 
+        /* Sidebar toggle (base) */
+        .sidebar-toggle {
+            display: inline-flex;
+            background: transparent;
+            border: none;
+            color: var(--text-light);
+            font-size: 1.25rem;
+            cursor: pointer;
+            padding: 0.35rem 0.6rem;
+            border-radius: 6px;
+            line-height: 1;
+            transition: var(--transition);
+            align-items: center;
+            justify-content: center;
+        }
+
+        .sidebar-toggle:hover {
+            background: rgba(255,255,255,0.12);
+        }
+
+        /* Sidebar collapsed (desktop) */
+        body.sidebar-collapsed .app-sidebar {
+            width: 70px;
+            min-width: 70px;
+        }
+
+        body.sidebar-collapsed .app-sidebar .nav-item {
+            padding: 0.75rem 0.5rem;
+            justify-content: center;
+            text-align: center;
+        }
+
+        body.sidebar-collapsed .app-sidebar .nav-item a {
+            justify-content: center;
+            font-size: 0;
+        }
+
+        body.sidebar-collapsed .app-sidebar .nav-item i {
+            margin-right: 0;
+            font-size: 1rem;
+        }
+
         /* Premium Content Area */
         .app-content {
             flex-grow: 1;
@@ -194,6 +245,14 @@
             padding: 1.5rem;
             background-color: #f5f7fa;
             background-image: linear-gradient(to bottom right, #f8fafc, #f1f5f9);
+        }
+
+        /* Consistent page width */
+        .page-section {
+            width: 100%;
+            max-width: 1500px;
+            margin-left: auto;
+            margin-right: auto;
         }
 
         /* Premium Cards */
@@ -303,17 +362,7 @@
             }
 
             .sidebar-toggle {
-                display: block;
-                background: none;
-                border: none;
-                color: white;
-                font-size: 1.25rem;
-                cursor: pointer;
-                transition: var(--transition);
-            }
-
-            .sidebar-toggle:hover {
-                transform: scale(1.1);
+                display: inline-flex;
             }
 
             .app-content {
@@ -404,7 +453,7 @@
         }
     </style>
 </head>
-<body class="{% if theme.mode == 'dark' %}dark-mode{% endif %}">
+<body class="app-layout {% if theme.mode == 'dark' %}dark-mode{% endif %} page-{{ request.resolver_match.url_name|default:'page' }}">
 
 <header class="app-header">
     <div class="d-flex align-items-center gap-3">
@@ -515,13 +564,6 @@
             </li>
             {% endif %}
 
-            {% if request.user.is_superuser or perm.allow_config_view %}
-            <li class="nav-item">
-                <a href="{% url 'add' %}">
-                    <i class="fas fa-file-invoice-dollar"></i> Config View
-                </a>
-            </li>
-            {% endif %}
 
             {% if request.user.is_superuser or perm.allow_barcodes %}
             <li class="nav-item">
@@ -533,27 +575,12 @@
 
             {% if request.user.is_superuser or perm.allow_reports %}
             <li class="nav-item">
-                <a href="#">
+                <a href="{% url 'reports_page' %}">
                     <i class="fas fa-chart-bar"></i> Reports
                 </a>
             </li>
             {% endif %}
 
-            {% if request.user.is_superuser or perm.allow_logs %}
-            <li class="nav-item">
-                <a href="{% url 'activity_log' %}">
-                    <i class="fas fa-history"></i> Activity Logs
-                </a>
-            </li>
-            {% endif %}
-
-            {% if request.user.is_superuser or perm.allow_company %}
-            <li class="nav-item">
-                <a href="{% url 'company_details' %}">
-                    <i class="fas fa-info-circle"></i> Company Info
-                </a>
-            </li>
-            {% endif %}
 
             {% if request.user.is_superuser or perm.allow_customers %}
             <li class="nav-item">
@@ -595,7 +622,7 @@
 
 
     <!-- Premium Main Content -->
-  <main class="app-content" id="mainContent">
+  <main class="app-content page-content page-{{ request.resolver_match.url_name|default:'page' }}" id="mainContent">
       {% block content %}
           {% if access_denied %}
               <div class="d-flex justify-content-center align-items-center animate__animated animate__fadeIn" style="height: 80vh;">
@@ -623,19 +650,6 @@
       {% endblock %}
   </main>
 </div>
-
-<!-- Premium Footer -->
-<header class="app-header">...</header>
-    <div class="app-container">
-        <aside class="app-sidebar">...</aside>
-        <main class="app-content">...</main>
-    </div>
-    <footer class="content-footer">...</footer>
-    <div>MahilMart Pro v1.0.0</div>
-    <div>
-        <i class="fas fa-copyright me-1"></i>2025 SuperMart Solutions Inc.
-    </div>
-</footer>
 
 <!-- Premium Confirm Modal -->
 <div class="modal fade" id="confirmModal">
@@ -714,8 +728,23 @@ document.addEventListener('DOMContentLoaded', function () {
        MOBILE SIDEBAR TOGGLE
     -------------------------------------------- */
     if (sidebarToggle) {
+        const storageKey = "sidebar_collapsed";
+        const stored = localStorage.getItem(storageKey);
+        if (stored === "1") {
+            document.body.classList.add("sidebar-collapsed");
+        }
+
         sidebarToggle.addEventListener("click", () => {
-            appSidebar.classList.toggle("active");
+            if (window.innerWidth <= 768) {
+                appSidebar.classList.toggle("active");
+                return;
+            }
+
+            document.body.classList.toggle("sidebar-collapsed");
+            localStorage.setItem(
+                storageKey,
+                document.body.classList.contains("sidebar-collapsed") ? "1" : "0"
+            );
         });
     }
 

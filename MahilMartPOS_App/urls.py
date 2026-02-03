@@ -28,6 +28,13 @@ urlpatterns = [
 
 
     path("company/settings/", views.company_name_settings_view, name="company_name_settings"),
+    path("company/activity/", views.company_activity_page, name="company_activity"),
+
+    path("settings/email/", views.email_settings_view, name="email_settings"),
+    path("settings/email/test/", views.email_test_view, name="email_test"),
+    path("settings/email/view/", views.email_view_page, name="email_view"),
+    path("settings/email/logs/", views.email_logs_view, name="email_logs"),
+    path("settings/email/preview/", views.email_preview_view, name="email_preview"),
 
 
     # dashboard page
@@ -38,6 +45,7 @@ urlpatterns = [
     path("points-config/", views.points_config_view, name="points_config"),
 
     path('generate-report/', views.generate_report, name='generate_report'),
+    path('reports/', views.reports_page, name='reports_page'),
     path('billing/<int:id>/', views.billing_detail_view, name='billing_detail'),
     path('billing/<int:bill_id>/items/', views.billing_items_api, name='billing_items_api'),
     path('sales-chart-data/', views.sales_chart_data, name='sales_chart_data'),
@@ -85,6 +93,7 @@ urlpatterns = [
     path('brand', views.Brand_creation, name='brand_creation'),
     path('tax', views.Tax_creation, name='tax_creation'),
     path('items/', views.items_list, name='items_list'),
+    path('items/edit/<int:item_id>/', views.edit_item, name='edit_item'),
     path('items/delete/<int:item_id>/', views.delete_item, name='delete_item'),
     path("check-item-code/", views.check_item_code, name="check_item_code"),
 
@@ -149,6 +158,8 @@ urlpatterns = [
     # expense page
     path('expense/',views.create_expense,name='expense'),
     path('expense/list/', views.expense_list, name='expense_list'),
+    path('expense/edit/<int:expense_id>/', views.edit_expense, name='expense_edit'),
+    path('expense/delete/<int:expense_id>/', views.delete_expense, name='expense_delete'),
 
     # company info page
     path('company/', views.company_settings_view, name='company_details'),

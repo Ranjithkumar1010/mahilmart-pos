@@ -802,6 +802,16 @@ Company Settings
                     </p>
                 </div>
 
+                <div id="statusNotification" class="status-notification">
+                    <div class="status-icon">
+                        <i class="fas fa-check-circle"></i>
+                    </div>
+                    <div class="status-content">
+                        <h4>Saved</h4>
+                        <p>Company details updated successfully.</p>
+                    </div>
+                </div>
+
                 <!-- Stats Overview -->
                 <div class="stats-grid">
 
@@ -822,7 +832,7 @@ Company Settings
                         <div class="stat-header">
                             <div class="stat-icon"><i class="fas fa-code"></i></div>
                         </div>
-                        <h3 class="stat-value">{{ company.short_name }}</h3>
+                        <h3 class="stat-value" id="previewCode">{{ company.short_name }}</h3>
                         <p class="stat-label">Brand Code</p>
                     </div>
 
@@ -846,7 +856,7 @@ Company Settings
                     </div>
 
                     <div class="form-body">
-                        <form method="post">
+                        <form method="post" id="companyForm">
                             {% csrf_token %}
 
                             <div class="form-row">
@@ -882,13 +892,23 @@ Company Settings
                     </div>
 
                     <div class="preview-content">
-                        <div class="preview-logo">
+                        {% if company %}
+                        <div class="preview-logo" id="previewLogo">
                             {{ company.short_name }}
                         </div>
                         <div class="preview-details">
-                            <h4>{{ company.print_name|default:company.company_name }}</h4>
-                            <p>{{ company.company_name }}</p>
+                            <h4 id="previewDisplayName">{{ company.print_name|default:company.company_name }}</h4>
+                            <p id="previewLegalName">{{ company.company_name }}</p>
                         </div>
+                        {% else %}
+                        <div class="preview-logo" id="previewLogo">
+                            MM
+                        </div>
+                        <div class="preview-details">
+                            <h4 id="previewDisplayName">Company Name</h4>
+                            <p id="previewLegalName">Not configured</p>
+                        </div>
+                        {% endif %}
                     </div>
                 </div>
 
@@ -896,6 +916,7 @@ Company Settings
                 <div class="activity-section">
                     <div class="activity-header">
                         <h3>Recent Activity</h3>
+                        <a href="{% url 'company_activity' %}" style="font-size:12px; color:#6366f1; text-decoration:none; font-weight:600;">View All</a>
                     </div>
 
                     <div class="activity-list">
@@ -992,9 +1013,10 @@ Company Settings
         }
         
         // Premium form submission
+        if (form) {
         form.addEventListener('submit', async function(e) {
             e.preventDefault();
-            
+
             const submitBtn = this.querySelector('button[type="submit"]');
             const originalText = submitBtn.innerHTML;
             
@@ -1007,7 +1029,9 @@ Company Settings
                 await new Promise(resolve => setTimeout(resolve, 1500));
                 
                 // Show success notification
-                statusNotification.classList.add('show');
+                if (statusNotification) {
+                    statusNotification.classList.add('show');
+                }
                 
                 // Update stats cards
                 const statValues = document.querySelectorAll('.stat-value');
@@ -1035,7 +1059,9 @@ Company Settings
                 
                 // Auto-hide notification
                 setTimeout(() => {
-                    statusNotification.classList.remove('show');
+                    if (statusNotification) {
+                        statusNotification.classList.remove('show');
+                    }
                 }, 5000);
                 
                 // Actually submit form
@@ -1053,6 +1079,7 @@ Company Settings
                 }, 2000);
             }
         });
+        }
         
         // Reset form function
         window.resetForm = function() {

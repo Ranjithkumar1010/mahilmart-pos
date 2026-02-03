@@ -178,10 +178,11 @@ tr:hover {
     <select name="role" id="roleFilter">
         <option value="">All Roles</option>
         {% for g in groups %}
-        <option value="{{ g.name }}" {% if role == g.name %}selected{% endif %}>
-            {{ g.name }}
-        </option>
+          <option value="{{ g.name }}" {% if role == g.name %}selected{% endif %}>
+              {{ g.name }}
+          </option>
         {% endfor %}
+
     </select>
 
     <input type="submit" value="🔍 Search">

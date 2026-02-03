@@ -54,28 +54,13 @@ input:checked + .switch-slider:before {
 
 
 
-{% if groups %}
-    {% for g in groups %}
-    <div class="group-toggle">
-        
-        <!-- Group Name -->
-        <span>{{ g.name }}</span>
-
-        <!-- Toggle -->
-        <label class="switch-wrapper">
-            <input 
-                type="checkbox" 
-                data-id="{{ g.id }}"
-                onchange="toggleGroup({{ g.id }})"
-            >
-            <span class="switch-slider"></span>
-        </label>
-
-    </div>
-    {% endfor %}
-{% else %}
-    <div class="text-muted">No groups available.</div>
-{% endif %}
+{% for g in groups %}
+  <div class="group-toggle">
+    <span>{{ g.name }}</span>
+  </div>
+{% empty %}
+  <div class="text-muted">No groups available.</div>
+{% endfor %}
 
 
 
@@ -85,21 +70,5 @@ function getCSRFToken() {
     return document.querySelector("[name=csrfmiddlewaretoken]").value;
 }
 
-/* ---------- Toggle Group ---------- */
-function toggleGroup(id) {
-    fetch("/ajax/toggle-group/", {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "X-CSRFToken": getCSRFToken()
-        },
-        body: JSON.stringify({ id: id })
-    })
-    .then(res => res.json())
-    .then(data => {
-        if (!data.success) {
-            alert("Toggle failed!");
-        }
-    });
-}
+// No toggle for auth groups
 </script>

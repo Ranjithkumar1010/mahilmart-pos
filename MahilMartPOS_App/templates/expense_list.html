@@ -123,6 +123,38 @@ h2 {
     font-style: normal;
 }
 
+.expense-actions {
+    margin-left: auto;
+    display: inline-flex;
+    gap: 8px;
+}
+
+.btn-edit,
+.btn-delete {
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: none;
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.btn-edit {
+    background: #e0f2fe;
+    color: #075985;
+}
+
+.btn-delete {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.btn-delete:hover,
+.btn-edit:hover {
+    filter: brightness(0.98);
+}
+
 /* ==============================
    ATTACHMENT BADGE
 ================================ */
@@ -258,7 +290,13 @@ h2 {
                 | Mode: <strong>{{ item.get_paymentmode_display }}</strong>
             {% endif %}
 
-            | ₹{{ item.amount }}
+            | ₹{{ item.amount }}            <span class="expense-actions">
+                <a class="btn-edit" href="{% url 'expense_edit' item.expenseid %}">Edit</a>
+                <form method="post" action="{% url 'expense_delete' item.expenseid %}" style="display:inline;" onsubmit="return confirm('Delete this expense?');">
+                    {% csrf_token %}
+                    <button type="submit" class="btn-delete">Delete</button>
+                </form>
+            </span>
         </div>
 
         {% if item.attachment %}
@@ -280,3 +318,4 @@ h2 {
 </div>
 
 {% endblock %}
+

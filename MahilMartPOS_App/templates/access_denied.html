@@ -151,7 +151,14 @@
         </div>
 
         <div class="access-hint">
-            An alert has been sent to the administrator for review.
+            {% if email_sent %}
+                An alert has been sent to the administrator for review.
+            {% else %}
+                Alert email could not be sent. Please contact the administrator.
+                {% if email_error %}
+                    <div style="margin-top:6px; color:#ef4444;">{{ email_error }}</div>
+                {% endif %}
+            {% endif %}
         </div>
     </div>
 </div>

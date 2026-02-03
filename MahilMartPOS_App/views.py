@@ -1,5 +1,6 @@
 import json
 import os,datetime
+import re
 from django.db import models
 from decimal import Decimal
 from django.contrib import messages
@@ -33,13 +34,14 @@ from decimal import Decimal
 from django.utils.timezone import now
 from django.db.models import Max
 from django.db.models import Sum, F
-from django.db.models.functions import Abs
+from django.db.models.functions import Abs, Coalesce, Cast
 from django.utils.timezone import now, timedelta
 from .models import Billing
 from django.db.models import Sum, F, Case, When
-from django.db.models import DecimalField, F, Sum
+from django.db.models import DecimalField, F, Sum, FloatField
 from django.db.models import F, ExpressionWrapper, DecimalField, CharField, Value, Case, When
 from django.shortcuts import render
+from django.views.decorators.cache import never_cache
 from django.shortcuts import render, redirect
 from .models import ComputerAlias, AdminSettings, CashierRestriction
 from .models import LoginLog
@@ -109,6 +111,7 @@ from .models import (
     PointsConfig,
     LoginLog,
     ComputerAlias,
+    BarcodeLabelSize,
 )
 
 
@@ -168,6 +171,14 @@ allow_company       = build_permission_decorator("company")
 allow_settings      = build_permission_decorator("settings")
 
 
+from django.conf import settings
+from django.shortcuts import render
+from django.utils import timezone
+from django.core.mail import EmailMultiAlternatives
+
+from .utils.email_config import apply_email_settings  # ✅ NEW IMPORT
+
+
 def access_denied(request):
     user = request.user if request.user.is_authenticated else None
 
@@ -178,7 +189,7 @@ def access_denied(request):
     ip = request.META.get("REMOTE_ADDR", "Unknown IP")
     now = timezone.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    subject = f"🚫 Access Denied Alert – MahilMart POS"
+    subject = "Access Denied Alert - MahilMart POS"
 
     # --------- PREMIUM HTML EMAIL TEMPLATE ----------
     html_message = f"""
@@ -186,7 +197,7 @@ def access_denied(request):
         <div style="max-width:600px; margin:auto; background:white; border-radius:12px;
                     box-shadow:0 4px 20px rgba(0,0,0,0.1); padding:25px;">
 
-            <h2 style="color:#d9534f; text-align:center;">🚫 Access Denied Alert</h2>
+            <h2 style="color:#d9534f; text-align:center;">Access Denied Alert</h2>
             <p style="text-align:center; font-size:15px; color:#666;">
                 A restricted page was accessed in <strong>MahilMart POS</strong>
             </p>
@@ -244,20 +255,88 @@ def access_denied(request):
     """
 
     # --------- SEND HTML EMAIL TO ADMINS ----------
+    email_sent = False
+    email_error = None
+    support_email = None
+
     try:
-        email = EmailMultiAlternatives(
-            subject,
-            "",  # plain text fallback if needed
-            settings.DEFAULT_FROM_EMAIL,
-            [admin_email for _, admin_email in settings.ADMINS],
-        )
-        email.attach_alternative(html_message, "text/html")
-        email.send(fail_silently=True)
+        # Apply database email settings (if configured)
+        apply_email_settings()
+
+        config = EmailConfig.objects.filter(is_active=True).first()
+        recipients = []
+
+        if config and config.alert_recipients:
+            recipients = [e.strip() for e in config.alert_recipients.split(",") if e.strip()]
+
+        if not recipients and config:
+            fallback = config.default_from_email or config.email_host_user
+            if fallback:
+                recipients = [fallback]
+
+        if not recipients:
+            recipients = [email for _, email in settings.ADMINS] if getattr(settings, "ADMINS", None) else []
+
+        support_email = recipients[0] if recipients else None
+
+        from_email = None
+        if config:
+            from_email = config.default_from_email or config.email_host_user
+        if not from_email:
+            from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(settings, "EMAIL_HOST_USER", None)
+
+        if recipients and from_email:
+            email = EmailMultiAlternatives(
+                subject=subject,
+                body="",  # plain text fallback
+                from_email=from_email,
+                to=recipients,
+            )
+            email.attach_alternative(html_message, "text/html")
+            email.send(fail_silently=False)
+            email_sent = True
+            _safe_log_email(
+                event_type="access_denied",
+                subject=subject,
+                recipients=", ".join(recipients),
+                status="sent",
+                triggered_by=user,
+                request_path=path,
+                ip_address=ip,
+            )
+        else:
+            email_error = "Email settings or recipients are not configured."
+            _safe_log_email(
+                event_type="access_denied",
+                subject=subject,
+                recipients=", ".join(recipients),
+                status="failed",
+                error_message=email_error,
+                triggered_by=user,
+                request_path=path,
+                ip_address=ip,
+            )
 
     except Exception as e:
-        print("Email sending failed:", e)
+        email_error = f"Email could not be sent. {e}"
+        print("Access denied email failed:", e)
+        _safe_log_email(
+            event_type="access_denied",
+            subject=subject,
+            recipients=", ".join(recipients) if "recipients" in locals() else "",
+            status="failed",
+            error_message=str(e),
+            triggered_by=user,
+            request_path=path,
+            ip_address=ip,
+        )
 
-    return render(request, "access_denied.html", status=403)
+    return render(request, "access_denied.html", {
+        "now": now,
+        "support_email": support_email,
+        "email_sent": email_sent,
+        "email_error": email_error,
+    }, status=403)
 
 
 
@@ -313,11 +392,27 @@ from .utils.ip_utils import get_client_ip, get_machine_name_from_ip
 
 
 def login_view(request):
+    from .models import CompanyDetails
+
+    def _get_branding_context():
+        company = CompanyDetails.objects.first()
+        app_name = "MY APP"
+        app_short = "MM"
+        if company:
+            app_name = company.print_name or company.company_name or app_name
+            app_short = company.short_name or app_short
+        return {
+            "app_name": app_name,
+            "app_short": app_short,
+            "app_tagline": "Enterprise Retail System",
+            "app_version": "v2.0.0",
+        }
+
     # ------------------------------------------
     # SHOW LOGIN PAGE (GET)
     # ------------------------------------------
     if request.method == 'GET':
-        return render(request, "home.html")
+        return render(request, "home.html", _get_branding_context())
 
     # ------------------------------------------
     # HANDLE FORM SUBMISSION (POST)
@@ -328,10 +423,12 @@ def login_view(request):
     user = authenticate(request, username=username, password=password)
 
     if not user:
-        return render(request, "home.html", {
+        context = _get_branding_context()
+        context.update({
             "error": "Invalid credentials",
             "username": username
         })
+        return render(request, "home.html", context)
 
     # ------------------------------------------
     # SUCCESS: LOGIN USER
@@ -449,25 +546,36 @@ def create_user(request):
 
 
 
+
 def ajax_get_groups(request):
-    groups = Group.objects.all().order_by("name")
+    from django.contrib.auth.models import Group as AuthGroup
+    groups = AuthGroup.objects.all().order_by("name")
     html = render_to_string("partials/group_list.html", {"groups": groups})
     return JsonResponse({"html": html})
+
 
 
 def ajax_create_group(request):
     """Create a new group through modal."""
     try:
+        from django.contrib.auth.models import Group as AuthGroup
         data = json.loads(request.body)
-        name = data.get("group_name", "").strip()
 
-        if not name:
-            return JsonResponse({"success": False, "message": "Group name cannot be empty!"})
+        group_name = data.get("group_name", "").strip()
 
-        if Group.objects.filter(name=name).exists():
-            return JsonResponse({"success": False, "message": "Group already exists!"})
+        if not group_name:
+            return JsonResponse({
+                "success": False,
+                "message": "Group name cannot be empty!"
+            })
 
-        group = Group.objects.create(name=name)
+        if AuthGroup.objects.filter(name__iexact=group_name).exists():
+            return JsonResponse({
+                "success": False,
+                "message": "Group already exists!"
+            })
+
+        group = AuthGroup.objects.create(name=group_name)
 
         return JsonResponse({
             "success": True,
@@ -476,15 +584,44 @@ def ajax_create_group(request):
         })
 
     except Exception as e:
-        return JsonResponse({"success": False, "message": str(e)})
+        return JsonResponse({
+            "success": False,
+            "message": str(e)
+        })
 
 
+from django.http import JsonResponse
+from django.views.decorators.http import require_POST
+from MahilMartPOS_App.models import Group
+import json
+
+
+@require_POST
 def ajax_toggle_group(request):
-    """(Optional) Toggle ON/OFF state if needed."""
-    data = json.loads(request.body)
-    group_id = data.get("id")
+    try:
+        data = json.loads(request.body)
+        group_id = data.get("id")
 
-    return JsonResponse({"success": True})
+        group = Group.objects.get(id=group_id)
+        group.is_active = not group.is_active
+        group.save()
+
+        return JsonResponse({
+            "success": True,
+            "is_active": group.is_active
+        })
+
+    except Group.DoesNotExist:
+        return JsonResponse({
+            "success": False,
+            "message": "Group not found"
+        })
+
+    except Exception as e:
+        return JsonResponse({
+            "success": False,
+            "message": str(e)
+        })
 
 
 
@@ -891,7 +1028,7 @@ from django.shortcuts import render, redirect
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 
-from .models import CompanyDetails
+from .models import CompanyDetails, Company, CompanyActivity
 from .forms import CompanyNameForm
 
 @allow_settings
@@ -899,18 +1036,96 @@ from .forms import CompanyNameForm
 def company_name_settings_view(request):
     company = CompanyDetails.objects.first()
 
+    # Base company record for activity log (kept separate from CompanyDetails)
+    base_company, _ = Company.objects.get_or_create(
+        id=1,
+        defaults={
+            "company_name": company.company_name if company else "My Company",
+            "short_name": company.short_name if company else "MC",
+            "created_by": request.user if request.user.is_authenticated else None,
+            "updated_by": request.user if request.user.is_authenticated else None,
+        }
+    )
+
     if request.method == "POST":
         form = CompanyNameForm(request.POST, instance=company)
         if form.is_valid():
-            form.save()
+            company_obj = form.save(commit=False)
+
+            # Ensure required fields have safe defaults if not set
+            if not company_obj.opening_time:
+                company_obj.opening_time = time(9, 0)
+            if not company_obj.closing_time:
+                company_obj.closing_time = time(21, 0)
+            if not company_obj.is_sunday_open:
+                company_obj.is_sunday_open = "Open"
+
+            # Fill required text fields with empty strings if missing
+            required_text_fields = [
+                "pincode",
+                "state",
+                "country",
+                "phone",
+                "mobile",
+                "email",
+                "gstin",
+                "gst_type",
+                "pan_no",
+                "fssai_no",
+                "trade_license_no",
+                "invoice_prefix",
+                "bank_name",
+                "account_no",
+                "ifsc_code",
+            ]
+            for field in required_text_fields:
+                if getattr(company_obj, field, None) is None:
+                    setattr(company_obj, field, "")
+
+            if not company_obj.email:
+                company_obj.email = "unknown@example.com"
+
+            company_obj.save()
+            CompanyActivity.objects.create(
+                company=base_company,
+                user=request.user if request.user.is_authenticated else None,
+                action="Company name settings updated"
+            )
             messages.success(request, "✅ Company details saved successfully")
             return redirect("company_name_settings")
     else:
         form = CompanyNameForm(instance=company)
 
+    activities = CompanyActivity.objects.filter(
+        company=base_company
+    ).order_by('-created_at')[:5]
+
     return render(request, "company_name_settings.html", {
         "form": form,
-        "company": company
+        "company": company,
+        "activities": activities
+    })
+
+
+@allow_settings
+def company_activity_page(request):
+    base_company, _ = Company.objects.get_or_create(
+        id=1,
+        defaults={
+            "company_name": "My Company",
+            "short_name": "MC",
+            "created_by": request.user if request.user.is_authenticated else None,
+            "updated_by": request.user if request.user.is_authenticated else None,
+        }
+    )
+
+    activities = CompanyActivity.objects.filter(
+        company=base_company
+    ).order_by('-created_at')
+
+    return render(request, "company_activity.html", {
+        "company": base_company,
+        "activities": activities,
     })
 
     
@@ -977,20 +1192,37 @@ def dashboard_view(request):
     # STOCK CALCULATION
     # ======================================================
     stock_qty_expr = Case(
-        When(unit__icontains='bulk', then=F('split_unit')),
-        default=F('quantity'),
-        output_field=DecimalField(max_digits=20, decimal_places=10),
+        When(inventory__unit__icontains='bulk', then=F('inventory__split_unit')),
+        default=F('inventory__quantity'),
+        output_field=FloatField(),
     )
 
     stock_aggregates = (
-        Inventory.objects.values('code', 'item_name', 'unit')
-        .annotate(total_qty=Sum(stock_qty_expr))
+        Item.objects.values('code', 'item_name', 'unit', 'min_stock')
+        .annotate(
+            total_qty=Coalesce(
+                Sum(stock_qty_expr),
+                Value(0.0),
+                output_field=FloatField()
+            ),
+            min_stock_val=Case(
+                When(
+                    min_stock__regex=r'^\d+(\.\d+)?$',
+                    then=Cast('min_stock', FloatField())
+                ),
+                default=Value(10.0),
+                output_field=FloatField(),
+            )
+        )
     )
 
     no_stock_items = stock_aggregates.filter(total_qty__lte=0)
     no_stock_count = no_stock_items.count()
 
-    low_stock_items = stock_aggregates.filter(total_qty__gt=0, total_qty__lt=10)
+    low_stock_items = stock_aggregates.filter(
+        total_qty__gt=0,
+        total_qty__lt=F('min_stock_val')
+    )
     low_stock_count = low_stock_items.count()
 
     # ======================================================
@@ -1177,8 +1409,38 @@ def dashboard_view(request):
     # ======================================================
     bills = Billing.objects.filter(created_at__date=today)
 
-    opening_amt = 2000
-    total_sales = sum(b.total_amount for b in bills)
+    # Opening amount: derived from previous day's closing (database-based)
+    prev_day = today - timedelta(days=1)
+    prev_cash_received = BillingPayment.objects.filter(
+        payment_date__date=prev_day,
+        payment_mode="Cash"
+    ).aggregate(total=Sum("new_payment"))["total"] or Decimal("0")
+
+    prev_card_received = BillingPayment.objects.filter(
+        payment_date__date=prev_day,
+        payment_mode="Card"
+    ).aggregate(total=Sum("new_payment"))["total"] or Decimal("0")
+
+    prev_cash_received1 = Billing.objects.filter(
+        created_at__date=prev_day
+    ).aggregate(total=Sum("cash_amount"))["total"] or Decimal("0")
+
+    prev_card_received1 = Billing.objects.filter(
+        created_at__date=prev_day
+    ).aggregate(total=Sum("card_amount"))["total"] or Decimal("0")
+
+    prev_sale_refund = SaleReturn.objects.filter(
+        created_at__date=prev_day
+    ).aggregate(total=Sum("total_refund_amount"))["total"] or Decimal("0")
+
+    prev_received_amt = prev_cash_received1 + prev_card_received1
+    opening_amt = (
+        prev_received_amt +
+        (prev_cash_received + prev_card_received) -
+        prev_sale_refund
+    )
+
+    total_sales = sum((b.total_amount for b in bills), Decimal("0"))
 
     todays_credit = bills.filter(bill_type="Credit").aggregate(
         total=Sum("balance")
@@ -1213,6 +1475,15 @@ def dashboard_view(request):
         (cash_received + card_received) -
         sale_refund
     )
+
+    # ======================================================
+    # FISCAL YEAR LABEL (from database if available)
+    # ======================================================
+    company_obj = CompanyDetails.objects.first()
+    if company_obj and company_obj.year_from and company_obj.year_to:
+        fiscal_year_label = f"{company_obj.year_from} - {company_obj.year_to}"
+    else:
+        fiscal_year_label = "Not set"
 
     # ======================================================
     # FINAL RENDER
@@ -1264,6 +1535,7 @@ def dashboard_view(request):
         'card_received1': card_received1,
         'received_amt': received_amt,
         'closing_amt': closing_amt,
+        'fiscal_year_label': fiscal_year_label,
     })
 
 
@@ -1413,6 +1685,70 @@ def generate_report(request):
         "report_type": report_type,
         "data": data
     })
+
+@allow_reports
+def reports_page(request):
+    # Sales summary
+    total_sales = Billing.objects.aggregate(
+        total=Sum(F('received') + F('balance'))
+    )['total'] or 0
+
+    # User-wise transactions
+    user_transactions = list(
+        Billing.objects.values("created_by__username")
+        .annotate(total_sales=Sum(F("received") + F("balance")))
+        .order_by("created_by__username")
+    )
+
+    # Customer report
+    customer_report = list(
+        Billing.objects.values("customer__name", "customer__cell")
+        .annotate(
+            total_purchases=Sum(F("received") + F("balance")),
+            outstanding=Sum(F("balance")),
+        )
+        .order_by("customer__name")
+    )
+
+    # Inventory report (aggregate by item, include items with no stock)
+    inventory_summary = (
+        Item.objects
+        .annotate(
+            total_qty=Coalesce(
+                Sum('inventory__quantity'),
+                Value(0.0),
+                output_field=FloatField()
+            )
+        )
+        .values("code", "item_name", "total_qty")
+    )
+
+    low_stock = list(
+        inventory_summary
+        .filter(total_qty__gt=0, total_qty__lt=10)
+        .order_by("total_qty")
+    )
+    out_of_stock = list(
+        inventory_summary
+        .filter(total_qty__lte=0)
+        .order_by("item_name")
+    )
+
+    # Revenue report
+    revenue = Billing.objects.aggregate(
+        total_sales=Sum(F("received") + F("balance")),
+        total_discounts=Sum("discount"),
+    )
+
+    context = {
+        "total_sales": total_sales,
+        "user_transactions": user_transactions,
+        "customer_report": customer_report,
+        "low_stock": low_stock,
+        "out_of_stock": out_of_stock,
+        "revenue": revenue,
+    }
+    return render(request, "reports.html", context)
 @allow_billing
 def billing_detail_view(request, id):
     bill = get_object_or_404(Billing, id=id)
@@ -1496,6 +1832,7 @@ from django.utils import timezone
 from django.contrib.auth.decorators import login_required
 from types import SimpleNamespace
 import json
+import traceback
 
 from MahilMartPOS_App.models import (
     Customer, Billing, BillingItem, Inventory,
@@ -1512,69 +1849,80 @@ from .decorators import allow_billing
 def create_invoice_view(request):
 
     # ==========================================================
+    # COMPANY & BUSINESS TYPE (GLOBAL – FIXES ERROR)
+    # ==========================================================
+    company_obj = CompanyDetails.objects.first()
+    business_type = (
+        company_obj.business_type.name
+        if company_obj and company_obj.business_type
+        else "retail"
+    )
+
+    # ==========================================================
     # AJAX: Fetch customer by phone
     # ==========================================================
-    if request.method == 'GET' and request.headers.get('x-requested-with') == 'XMLHttpRequest':
-        phone = request.GET.get('phone')
+    if (
+        request.method == "GET"
+        and request.headers.get("x-requested-with") == "XMLHttpRequest"
+        and request.GET.get("phone")
+    ):
+        phone = request.GET.get("phone").strip()
         customer = Customer.objects.filter(cell=phone).first()
 
         return JsonResponse({
-            'name': customer.name if customer else '',
-            'points': float(customer.total_points) if customer else 0.0,
-            'email': customer.email if customer else '',
-            'customer_address': customer.address if customer else '',
-            'date_joined': str(customer.date_joined.date()) if customer and customer.date_joined else '',
-            'remarks': '',
+            "exists": bool(customer),
+            "name": customer.name if customer else None,
+            "points": float(customer.total_points) if customer else 0.0,
+            "email": customer.email if customer else "",
+            "customer_address": customer.address if customer else "",
+            "date_joined": (
+                customer.date_joined.date().isoformat()
+                if customer and customer.date_joined
+                else ""
+            ),
         })
 
     # ==========================================================
     # POST: Save invoice
     # ==========================================================
-    if request.method == 'POST':
+    if request.method == "POST":
         try:
             with transaction.atomic():
 
                 # ------------------------------
-                # COMPANY & BUSINESS TYPE
-                # ------------------------------
-                company_obj = CompanyDetails.objects.first()
-                business_type = (
-                    company_obj.business_type.name
-                    if company_obj and company_obj.business_type
-                    else "retail"
-                )
-
-                # ------------------------------
                 # CUSTOMER
                 # ------------------------------
-                cell = (request.POST.get('cell') or '').strip()
-                name = (request.POST.get('name') or '').strip()
-                email = (request.POST.get('email') or '').strip()
-                address = (request.POST.get('address') or '').strip()
+                cell = (request.POST.get("cell") or "").strip()
+                name = (request.POST.get("name") or "").strip()
+                email = (request.POST.get("email") or "").strip()
+                address = (request.POST.get("address") or "").strip()
 
-                customer, _ = Customer.objects.get_or_create(
+                if not cell or not name:
+                    raise ValueError("Customer name and phone are required")
+
+                customer, created = Customer.objects.get_or_create(
                     cell=cell,
                     defaults={
-                        'name': name,
-                        'email': email,
-                        'address': address,
-                        'total_points': 0
-                    }
+                        "name": name,
+                        "email": email,
+                        "address": address,
+                        "total_points": 0,
+                    },
                 )
 
-                if name and not customer.name:
-                    customer.name = name
-                if email and not customer.email:
-                    customer.email = email
-                if address and not customer.address:
-                    customer.address = address
-
-                customer.save()
+                if not created:
+                    if name:
+                        customer.name = name
+                    if email:
+                        customer.email = email
+                    if address:
+                        customer.address = address
+                    customer.save()
 
                 # ------------------------------
                 # BILL NUMBER
                 # ------------------------------
-                latest = Billing.objects.order_by('-id').first()
+                latest = Billing.objects.order_by("-id").first()
                 bill_no = (
                     str(int(latest.bill_no) + 1)
                     if latest and str(latest.bill_no).isdigit()
@@ -1585,59 +1933,67 @@ def create_invoice_view(request):
                 # POINTS
                 # ------------------------------
                 old_points = float(customer.total_points or 0)
-                today_points = float(request.POST.get('total_earned') or 0)
+                today_points = float(request.POST.get("total_earned") or 0)
                 new_total_points = old_points + today_points
 
                 # ------------------------------
-                # ITEMS & DISCOUNT
+                # ITEMS
                 # ------------------------------
-                items = json.loads(request.POST.get('item_data', '[]'))
-                total_sale_amount = sum(float(i.get('amount') or 0) for i in items)
+                raw_items = request.POST.get("item_data")
+                if not raw_items:
+                    raise ValueError("No items received")
 
-                discount_percent = float(request.POST.get('discount') or 0)
+                items = json.loads(raw_items)
+
+                total_sale_amount = sum(
+                    float(i.get("amount") or 0) for i in items
+                )
+
+                discount_percent = float(request.POST.get("discount") or 0)
                 discount_amt = total_sale_amount * discount_percent / 100
 
                 # ------------------------------
                 # PAYMENTS
                 # ------------------------------
-                cash = float(request.POST.get('cash_amount') or 0)
-                card = float(request.POST.get('card_amount') or 0)
+                cash = float(request.POST.get("cash_amount") or 0)
+                card = float(request.POST.get("card_amount") or 0)
+                received = float(request.POST.get("received") or 0)
+                balance = float(request.POST.get("balance") or 0)
 
                 # ------------------------------
                 # CREATE BILLING
                 # ------------------------------
                 billing = Billing.objects.create(
                     customer=customer,
-                    to=request.POST.get('to'),
                     bill_no=bill_no,
                     date=timezone.now(),
                     cash_amount=cash,
                     card_amount=card,
-                    bill_type=request.POST.get('bill_type'),
-                    counter=request.POST.get('counter'),
-                    order_no=request.POST.get('order_no'),
-                    sale_type=request.POST.get('sale_type'),
-                    received=float(request.POST.get('received') or 0),
-                    balance=max(float(request.POST.get('balance') or 0), 0),
+                    received=received,
+                    balance=max(balance, 0),
+                    bill_type=request.POST.get("bill_type"),
+                    counter=request.POST.get("counter"),
+                    order_no=request.POST.get("order_no"),
+                    sale_type=request.POST.get("sale_type"),
                     discount=discount_percent,
                     discount_amt=discount_amt,
                     points=new_total_points,
                     points_earned=today_points,
-                    remarks=request.POST.get('remarks', ''),
+                    remarks=request.POST.get("remarks", ""),
                     status_on="counter_bill",
                     created_by=request.user,
                 )
 
                 # ------------------------------
-                # FIFO STOCK (BUSINESS AWARE)
+                # FIFO STOCK + BILL ITEMS
                 # ------------------------------
                 for row in items:
-                    code = row.get('code')
-                    item_name = row.get('item_name')
-                    unit = row.get('unit')
-                    qty = float(row.get('qty') or 0)
-                    mrp = float(row.get('mrsp') or 0)
-                    selling_price = float(row.get('sellingprice') or 0)
+                    code = row.get("code")
+                    item_name = row.get("item_name")
+                    unit = row.get("unit")
+                    qty = float(row.get("qty") or 0)
+                    mrp = float(row.get("mrsp") or 0)
+                    selling_price = float(row.get("sellingprice") or 0)
                     amount = qty * selling_price
 
                     remaining_qty = qty
@@ -1645,7 +2001,7 @@ def create_invoice_view(request):
                     inventory_qs = Inventory.objects.filter(
                         code=code,
                         status="in_stock",
-                        quantity__gt=0
+                        quantity__gt=0,
                     )
 
                     if business_type == "medical":
@@ -1653,13 +2009,13 @@ def create_invoice_view(request):
                             expiry_date__lt=timezone.now().date()
                         )
 
-                    inventory_qs = inventory_qs.order_by('purchased_at', 'id')
+                    inventory_qs = inventory_qs.order_by("purchased_at", "id")
 
                     for inv in inventory_qs:
                         if remaining_qty <= 0:
                             break
 
-                        is_bulk = "bulk" in (inv.unit or '').lower()
+                        is_bulk = "bulk" in (inv.unit or "").lower()
 
                         if is_bulk:
                             available = inv.split_unit or 0
@@ -1689,7 +2045,7 @@ def create_invoice_view(request):
                         qty=qty,
                         mrp=mrp,
                         selling_price=selling_price,
-                        amount=amount
+                        amount=amount,
                     )
 
                 # ------------------------------
@@ -1698,41 +2054,29 @@ def create_invoice_view(request):
                 customer.total_points = new_total_points
                 customer.save(update_fields=["total_points"])
 
-                messages.success(request, "✅ Billing submitted successfully!")
-                return redirect('billing')
+                messages.success(request, "✅ Billing submitted successfully")
+                return redirect("billing")
 
         except Exception as e:
-            print("[ERROR] Invoice creation failed:", e)
-            messages.error(request, "Something went wrong while saving the invoice.")
+            traceback.print_exc()
+            messages.error(request, f"Billing failed: {e}")
 
     # ==========================================================
     # GET: Render billing page
     # ==========================================================
-    latest_bill = Billing.objects.order_by('-id').first()
+    latest_bill = Billing.objects.order_by("-id").first()
     next_bill_no = (
         str(int(latest_bill.bill_no) + 1)
         if latest_bill and str(latest_bill.bill_no).isdigit()
-        else '1'
+        else "1"
     )
 
-    today_date = timezone.now().strftime('%Y-%m-%d')
+    today_date = timezone.now().strftime("%Y-%m-%d")
 
-    bill_types = BillType.objects.all().order_by('billtype_id')
-    payment_modes = PaymentMode.objects.all()
-    counters = Counter.objects.all().order_by('counter_id')
-
-    company_obj = CompanyDetails.objects.first()
-    business_type = (
-        company_obj.business_type.name
-        if company_obj and company_obj.business_type
-        else "retail"
-    )
-
-    # ✅ COMPANY DATA (TEXT-BASED BRANDING ONLY)
     company = SimpleNamespace(
-        short_name=company_obj.short_name if company_obj and company_obj.short_name else "MM",
+        short_name=company_obj.short_name if company_obj else "MM",
         company_name=company_obj.company_name if company_obj else "MY STORE",
-        print_name=company_obj.print_name if company_obj and company_obj.print_name else None,
+        print_name=company_obj.print_name if company_obj else None,
         address=company_obj.address if company_obj else "",
         gstin=company_obj.gstin if company_obj else "",
         mobile=company_obj.mobile if company_obj else "",
@@ -1740,29 +2084,31 @@ def create_invoice_view(request):
         website=company_obj.website if company_obj else "",
     )
 
-    points_config = PointsConfig.objects.order_by('-updated_at').first()
+    points_config = PointsConfig.objects.order_by("-updated_at").first()
     amount_for_one_point = points_config.amount_for_one_point if points_config else 200
 
-    billing_config = BillingConfig.objects.order_by('-id').first()
+    billing_config = BillingConfig.objects.order_by("-id").first()
     enable_gst = billing_config.enable_gst if billing_config else False
 
-    last_log = LoginLog.objects.filter(user=request.user).order_by('-login_time').first()
+    last_log = LoginLog.objects.filter(user=request.user).order_by("-login_time").first()
     raw_computer_name = last_log.computer_name if last_log else ""
     alias_obj = ComputerAlias.objects.filter(computer_name=raw_computer_name).first()
     current_counter_name = alias_obj.alias_name if alias_obj else raw_computer_name
 
-    return render(request, 'billing.html', {
-        'today_date': today_date,
-        'bill_no': next_bill_no,
-        'bill_types': bill_types,
-        'payment_modes': payment_modes,
-        'counter': counters,
-        'company': company,
-        'business_type': business_type,
-        'amount_for_one_point': amount_for_one_point,
-        'enable_gst': enable_gst,
-        'current_counter_name': current_counter_name,
+    return render(request, "billing.html", {
+        "today_date": today_date,
+        "bill_no": next_bill_no,
+        "bill_types": BillType.objects.all().order_by("billtype_id"),
+        "payment_modes": PaymentMode.objects.all(),
+        "counter": Counter.objects.all().order_by("counter_id"),
+        "company": company,
+        "business_type": business_type,  # ✅ SAFE NOW
+        "amount_for_one_point": amount_for_one_point,
+        "enable_gst": enable_gst,
+        "current_counter_name": current_counter_name,
     })
+
+
 
 
 
@@ -1928,24 +2274,26 @@ def add_billtype(request):
             n += 1
         return n
 
-    billtype_form = BillTypeForm()
-    paymentmode_form = PaymentModeForm()
-    counter_form = CounterForm()
+    billtype_next_id = auto_id(
+        BillType.objects.values_list("billtype_id", flat=True).order_by("billtype_id")
+    )
+    paymentmode_next_id = auto_id(
+        PaymentMode.objects.values_list("mode_id", flat=True).order_by("mode_id")
+    )
+    counter_next_id = auto_id(
+        Counter.objects.values_list("counter_id", flat=True).order_by("counter_id")
+    )
+
+    billtype_form = BillTypeForm(initial={"billtype_id": billtype_next_id})
+    paymentmode_form = PaymentModeForm(initial={"mode_id": paymentmode_next_id})
+    counter_form = CounterForm(initial={"counter_id": counter_next_id})
 
     points_config = PointsConfig.objects.first()
     points_form = PointsConfigForm(instance=points_config)
 
-    billtype_form.initial["billtype_id"] = auto_id(
-        BillType.objects.values_list("billtype_id", flat=True).order_by("billtype_id")
-    )
-
-    paymentmode_form.initial["mode_id"] = auto_id(
-        PaymentMode.objects.values_list("mode_id", flat=True).order_by("mode_id")
-    )
-
-    counter_form.initial["counter_id"] = auto_id(
-        Counter.objects.values_list("counter_id", flat=True).order_by("counter_id")
-    )
+    billtype_form.fields["billtype_id"].initial = billtype_next_id
+    paymentmode_form.fields["mode_id"].initial = paymentmode_next_id
+    counter_form.fields["counter_id"].initial = counter_next_id
 
     # -----------------------------
     # POST HANDLING
@@ -2267,10 +2615,18 @@ def create_quotation(request):
             cell = request.POST.get('cell')
             name = request.POST.get('name')           
             address = request.POST.get('address')
-            date_joined = request.POST.get('date_joined')
-            sale_type = request.POST.get('sale_type')
-            bill_type = request.POST.get('bill_type')
-            counter = request.POST.get('counter')            
+            date_joined_raw = (request.POST.get('date_joined') or "").strip()
+            date_joined = parse_date(date_joined_raw) if date_joined_raw else None
+            if not date_joined:
+                date_joined = date.today()
+            sale_type = (request.POST.get('sale_type') or "").strip() or "counter"
+            bill_type = (request.POST.get('bill_type') or "").strip() or "Credit"
+            counter = (request.POST.get('counter') or "").strip()
+            if not counter:
+                last_log = LoginLog.objects.filter(user=request.user).order_by("-login_time").first()
+                raw_computer_name = last_log.computer_name if last_log else ""
+                alias_obj = ComputerAlias.objects.filter(computer_name=raw_computer_name).first()
+                counter = alias_obj.alias_name if alias_obj else raw_computer_name or "Main Counter"
             total_points = float(request.POST.get('points') or 0)
             earned_points = float(request.POST.get('total_earned') or 0)
             discount = float(request.POST.get('discount') or 0)
@@ -2306,12 +2662,20 @@ def create_quotation(request):
                 discount_after_total=total_after_discount,
             )
 
-            return JsonResponse({'success': True, 'quotation_id': quotation.id})
+            return JsonResponse({
+                'success': True,
+                'quotation_id': quotation.id,
+                'qtn_no': quotation.qtn_no
+            })
 
         except Exception as e:
             return JsonResponse({'success': False, 'error': f"Failed to save quotation. {str(e)}"})
 
-    return redirect('quotation_detail', qtn_no=quotation.qtn_no)    
+    # If accessed directly, redirect to the latest quotation (if any)
+    last_quotation = Quotation.objects.last()
+    if last_quotation:
+        return redirect('quotation_detail', qtn_no=last_quotation.qtn_no)
+    return redirect('quotation_detail', qtn_no="")
 
 def quotation_detail(request, qtn_no=None):
     # If qtn_no is undefined/empty, fetch the last quotation
@@ -2379,19 +2743,26 @@ def update_payment(request, order_id):
 
     if request.method == "POST":
         try:
-            paid_now = request.POST.get("paid_now")
+            paid_now_raw = (request.POST.get("paid_now") or "").strip()
 
-            if paid_now:
-                paid_now = Decimal(paid_now)
+            if paid_now_raw:
+                normalized = paid_now_raw.replace(",", "")
+                if not re.fullmatch(r"\d+(\.\d{1,2})?", normalized):
+                    messages.error(request, "Invalid amount. Use up to 2 decimal places.")
+                    return redirect('order_detail', order_id=order.order_id)
+
+                paid_now = Decimal(normalized).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
                 order.paid_amount = paid_now
 
                 total_paid = order.advance + paid_now
                 order.due_balance = (order.total_order_amount - total_paid).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
 
             else:
-                 order.paid_amount = Decimal("0.00")
-                 order.due_balance = (order.total_order_amount - order.advance).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
-                 order.order_status = 'completed' if order.due_balance <= 0 else 'pending'                
+                order.paid_amount = Decimal("0.00")
+                order.due_balance = (order.total_order_amount - order.advance).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
+
+            order.order_status = 'completed' if order.due_balance <= 0 else 'pending'
+            order.save()
             messages.success(request, f"Order #{order_id} payment updated.")
 
         except Exception as e:
@@ -2616,8 +2987,25 @@ def convert_quotation_to_order(request, qtn_no):
 
 @allow_items
 def item_creation(request):  
+    def get_next_item_code(prefix="M", width=3):
+        max_num = 0
+        codes = Item.objects.filter(code__startswith=prefix).values_list("code", flat=True)
+        for code in codes:
+            suffix = code[len(prefix):]
+            if suffix.isdigit():
+                num = int(suffix)
+                if num > max_num:
+                    max_num = num
+        return f"{prefix}{str(max_num + 1).zfill(width)}"
+
     if request.method == "POST":
-        code = request.POST.get('code')
+        entry_mode = (request.POST.get('code_entry_mode') or 'manual').strip().lower()
+        code = (request.POST.get('code') or '').strip()
+        if entry_mode == "barcode" and not code:
+            messages.error(request, "Please scan the barcode to populate the item code.")
+            return redirect('items')
+        if not code:
+            code = get_next_item_code()
         status = request.POST.get('status')
         item_name = request.POST.get('item_name')
         print_name = request.POST.get('print_name')
@@ -2641,6 +3029,11 @@ def item_creation(request):
         P_unit = get_object_or_404(Unit, id=P_unit_id) if P_unit_id else None
         group = get_object_or_404(Group, id=group_id) if group_id else None
         brand = get_object_or_404(Brand, id=brand_id) if brand_id else None
+
+        unit_name = unit.unit_name if unit else None
+        p_unit_name = P_unit.unit_name if P_unit else None
+        group_name = group.group_name if group else None
+        brand_name = brand.brand_name if brand else None
 
         HSN_SAC = request.POST.get('hsn_sac')
         use_MRP = request.POST.get('use_mrp') == "Yes"
@@ -2668,10 +3061,10 @@ def item_creation(request):
             status=status,
             item_name=item_name,
             print_name=print_name,
-            unit=unit,
-            P_unit=P_unit,
-            group=group,
-            brand=brand,
+            unit=unit_name,
+            P_unit=p_unit_name,
+            group=group_name,
+            brand=brand_name,
             tax=gst_percent,
             HSN_SAC=HSN_SAC,
             use_MRP=use_MRP,
@@ -2693,7 +3086,102 @@ def item_creation(request):
         'units': Unit.objects.all(),
         'brands': Brand.objects.all(),
         'groups': Group.objects.all(),
-        'taxes': Tax.objects.all()
+        'taxes': Tax.objects.all(),
+        'next_item_code': get_next_item_code(),
+        'is_edit': False,
+        'use_mrp_value': False,
+    }
+    return render(request, 'items.html', context)
+
+@allow_items
+def edit_item(request, item_id):
+    item = get_object_or_404(Item, id=item_id)
+
+    if request.method == "POST":
+        code = (request.POST.get('code') or '').strip()
+        if not code:
+            messages.error(request, "Item code is required.")
+            return redirect('edit_item', item_id=item_id)
+
+        if Item.objects.filter(code=code).exclude(id=item_id).exists():
+            messages.error(request, f"Item with code '{code}' already exists.")
+            return redirect('edit_item', item_id=item_id)
+
+        item.code = code
+        item.status = request.POST.get('status') or item.status
+        item.item_name = request.POST.get('item_name') or item.item_name
+        item.print_name = request.POST.get('print_name') or item.print_name
+
+        unit_id = request.POST.get('unit')
+        p_unit_id = request.POST.get('P_unit')
+        group_id = request.POST.get('group')
+        brand_id = request.POST.get('brand')
+
+        if unit_id:
+            unit = get_object_or_404(Unit, id=unit_id)
+            item.unit = unit.unit_name
+        if p_unit_id:
+            p_unit = get_object_or_404(Unit, id=p_unit_id)
+            item.P_unit = p_unit.unit_name
+        if group_id:
+            group = get_object_or_404(Group, id=group_id)
+            item.group = group.group_name
+        if brand_id:
+            brand = get_object_or_404(Brand, id=brand_id)
+            item.brand = brand.brand_name
+
+        tax_id = request.POST.get('tax')
+        if tax_id:
+            tax_obj = get_object_or_404(Tax, id=tax_id)
+            item.tax = tax_obj.gst_percent
+
+        item.HSN_SAC = request.POST.get('hsn_sac') or item.HSN_SAC
+        item.use_MRP = request.POST.get('use_mrp') == "Yes"
+        item.points = request.POST.get('points') or 0
+        item.cess_per_qty = request.POST.get('cess_per_qty') or 0
+
+        item.P_rate = request.POST.get('p_rate') or 0
+        item.cost_rate = request.POST.get('cost_rate') or 0
+        item.MRSP = request.POST.get('mrp') or 0
+        item.sale_rate = request.POST.get('sale_rate') or 0
+        item.whole_rate = request.POST.get('whole_rate') or 0
+        item.whole_rate_2 = request.POST.get('whole_rate2') or 0
+        item.min_stock = request.POST.get('min_stock') or 0
+
+        item.carry_over = request.POST.get('carry_over') or item.carry_over
+        item.manual = request.POST.get('manual') or item.manual
+        item.stock_item = request.POST.get('stock_item') or item.stock_item
+
+        item.save()
+        messages.success(request, "Item updated successfully!")
+        return redirect('items_list')
+
+    units = list(Unit.objects.all())
+    groups = list(Group.objects.all())
+    brands = list(Brand.objects.all())
+    taxes = list(Tax.objects.all())
+
+    selected_unit_id = next((u.id for u in units if str(u) == str(item.unit) or u.unit_name == str(item.unit)), None)
+    selected_p_unit_id = next((u.id for u in units if str(u) == str(item.P_unit) or u.unit_name == str(item.P_unit)), None)
+    selected_group_id = next((g.id for g in groups if g.group_name == str(item.group)), None)
+    selected_brand_id = next((b.id for b in brands if b.brand_name == str(item.brand)), None)
+    selected_tax_id = next((t.id for t in taxes if str(t.gst_percent) == str(item.tax)), None)
+
+    use_mrp_value = str(item.use_MRP).lower() in ("yes", "true", "1")
+
+    context = {
+        'item': item,
+        'units': units,
+        'brands': brands,
+        'groups': groups,
+        'taxes': taxes,
+        'selected_unit_id': selected_unit_id,
+        'selected_p_unit_id': selected_p_unit_id,
+        'selected_group_id': selected_group_id,
+        'selected_brand_id': selected_brand_id,
+        'selected_tax_id': selected_tax_id,
+        'is_edit': True,
+        'use_mrp_value': use_mrp_value,
     }
     return render(request, 'items.html', context)
 @allow_items
@@ -2795,15 +3283,22 @@ def build_label(item, label_size):
     if not barcode_clean:
         barcode_clean = "NA"
 
-    # Size settings
-    if label_size == "35x22":
-        width, height, per_row, gap = 35, 22, 3, "3 mm,0 mm"
-    elif label_size == "50x40":
-        width, height, per_row, gap = 50, 40, 2, "3 mm,0 mm"
-    elif label_size == "70x35":
-        width, height, per_row, gap = 70, 35, 1, "3 mm,0 mm"
+    # Size settings (DB sizes take priority)
+    size_obj = BarcodeLabelSize.objects.filter(name=label_size).first()
+    if size_obj:
+        width = size_obj.width_mm
+        height = size_obj.height_mm
+        per_row = size_obj.per_row or 1
+        gap = "3 mm,0 mm"
     else:
-        width, height, per_row, gap = 35, 22, 3, "3 mm,0 mm"
+        if label_size == "35x22":
+            width, height, per_row, gap = 35, 22, 3, "3 mm,0 mm"
+        elif label_size == "50x40":
+            width, height, per_row, gap = 50, 40, 2, "3 mm,0 mm"
+        elif label_size == "70x35":
+            width, height, per_row, gap = 70, 35, 1, "3 mm,0 mm"
+        else:
+            width, height, per_row, gap = 35, 22, 3, "3 mm,0 mm"
 
     # Base TSPL setup
     tspl = f"SIZE {width*per_row} mm,{height} mm\n"   # total width for row
@@ -2897,7 +3392,10 @@ def print_barcode(request):
 
         return redirect("print_barcode")
 
-    return render(request, "print_barcode.html")
+    label_sizes = BarcodeLabelSize.objects.all().order_by("name")
+    return render(request, "print_barcode.html", {
+        "label_sizes": label_sizes,
+    })
 @allow_barcodes
 def fetch_item_details(request):
     code = request.GET.get("code")
@@ -3651,6 +4149,10 @@ def create_purchase(request):
 
         #  Check if invoice already exists
         purchase = Purchase.objects.filter(invoice_no=invoice_no).first()
+
+        # Prevent creating an empty purchase for a new invoice
+        if not purchase and len(items_data) == 0:
+            return JsonResponse({'error': 'No items to save for a new invoice.'}, status=400)
         if purchase:
             # ---- UPDATE EXISTING PURCHASE ----
             purchase.supplier = supplier
@@ -4132,6 +4634,7 @@ def purchase_payment_list_view(request):
         'end_date': end_date
     })
 @allow_purchase
+@never_cache
 def purchase_tracking(request):  
     purchase_tracking_summary = PurchaseTracking.objects.select_related(
         'purchase', 'purchase__supplier'
@@ -4632,55 +5135,76 @@ def suppliers_view(request):
         'form': form,
     })
 
+from django.shortcuts import render, redirect, get_object_or_404
+from MahilMartPOS_App.models import Supplier
+
+
+def get_next_supplier_id_preview():
+    last_supplier = Supplier.objects.order_by('-id').first()
+    if last_supplier and last_supplier.supplier_id:
+        last_number = int(last_supplier.supplier_id.split('-')[1])
+        next_number = last_number + 1
+    else:
+        next_number = 1
+    return f"SUP-{next_number:04d}"
+
+
 @allow_suppliers
 def add_supplier(request):
-    if request.method == 'POST':      
-
+    if request.method == "POST":
         Supplier.objects.create(
-            supplier_id=request.POST.get('supplier_id'),
-            name=request.POST.get('name'),
-            contact_person=request.POST.get('contact_person'),
-            phone=request.POST.get('phone'),
-            email=request.POST.get('email'),
-            address=request.POST.get('address'),
-            gst_number=request.POST.get('gst_number'),
-            pan_number=request.POST.get('pan_number'),
-            credit_terms=request.POST.get('credit_terms'),
-            opening_balance=request.POST.get('opening_balance') or 0,
-            bank_name=request.POST.get('bank_name'),
-            account_number=request.POST.get('account_number'),
-            ifsc_code=request.POST.get('ifsc_code'),
-            status = request.POST.get('status'),
-            notes=request.POST.get('notes'),            
+            name=request.POST.get("name"),
+            contact_person=request.POST.get("contact_person"),
+            phone=request.POST.get("phone"),
+            email=request.POST.get("email"),
+            address=request.POST.get("address"),
+            gst_number=request.POST.get("gst_number"),
+            fssai_number=request.POST.get("fssai_number"),
+            pan_number=request.POST.get("pan_number"),
+            credit_terms=request.POST.get("credit_terms"),
+            opening_balance=request.POST.get("opening_balance") or 0,
+            bank_name=request.POST.get("bank_name"),
+            account_number=request.POST.get("account_number"),
+            ifsc_code=request.POST.get("ifsc_code"),
+            status=request.POST.get("status") or "Active",
+            notes=request.POST.get("notes"),
         )
-        return redirect('suppliers')
+        return redirect("suppliers")
 
-    return render(request, 'add_supplier.html')
+    return render(request, "add_supplier.html", {
+        "next_supplier_id": get_next_supplier_id_preview()
+    })
+
 
 @allow_suppliers
 def edit_supplier(request, supplier_id):
     supplier = get_object_or_404(Supplier, pk=supplier_id)
 
-    if request.method == 'POST':
-        supplier.supplier_id = request.POST.get('supplier_id')
-        supplier.name = request.POST.get('name')
-        supplier.contact_person = request.POST.get('contact_person')
-        supplier.phone = request.POST.get('phone')
-        supplier.email = request.POST.get('email')
-        supplier.address = request.POST.get('address')
-        supplier.gst_number = request.POST.get('gst_number')
-        supplier.fssai_number = request.POST.get('fssai_number')
-        supplier.pan_number = request.POST.get('pan_number')
-        supplier.credit_terms = request.POST.get('credit_terms')
-        supplier.opening_balance = request.POST.get('opening_balance') or 0
-        supplier.bank_name = request.POST.get('bank_name')
-        supplier.account_number = request.POST.get('account_number')
-        supplier.ifsc_code = request.POST.get('ifsc_code')
-        supplier.status = request.POST.get('status')
-        supplier.notes = request.POST.get('notes')       
+    if request.method == "POST":
+        # ❌ DO NOT TOUCH supplier_id
+        supplier.name = request.POST.get("name")
+        supplier.contact_person = request.POST.get("contact_person")
+        supplier.phone = request.POST.get("phone")
+        supplier.email = request.POST.get("email")
+        supplier.address = request.POST.get("address")
+        supplier.gst_number = request.POST.get("gst_number")
+        supplier.fssai_number = request.POST.get("fssai_number")
+        supplier.pan_number = request.POST.get("pan_number")
+        supplier.credit_terms = request.POST.get("credit_terms")
+        supplier.opening_balance = request.POST.get("opening_balance") or 0
+        supplier.bank_name = request.POST.get("bank_name")
+        supplier.account_number = request.POST.get("account_number")
+        supplier.ifsc_code = request.POST.get("ifsc_code")
+        supplier.status = request.POST.get("status")
+        supplier.notes = request.POST.get("notes")
         supplier.save()
-        return redirect('suppliers')
-    return render(request, 'edit_supplier.html', {'supplier': supplier})
+
+        return redirect("suppliers")
+
+    return render(request, "edit_supplier.html", {
+        "supplier": supplier
+    })
+
 
 @allow_suppliers
 def delete_supplier(request, supplier_id):
@@ -4972,6 +5496,38 @@ def create_expense(request):
     else:
         form = ExpenseForm()
     return render(request, 'expense.html', {'form': form})
+
+@allow_expenses
+def edit_expense(request, expense_id):
+    expense = get_object_or_404(Expense, pk=expense_id)
+    if request.method == 'POST':
+        form = ExpenseForm(request.POST, request.FILES, instance=expense)
+        if form.is_valid():
+            expense = form.save(commit=False)
+            expense.category_detail = request.POST.get('category_detail')
+            expense.save()
+            messages.success(request, "Expense updated successfully.")
+            return redirect('expense_list')
+    else:
+        form = ExpenseForm(instance=expense)
+        if 'datetime' in form.fields:
+            form.fields['datetime'].widget.attrs.pop('readonly', None)
+
+    return render(request, 'expense.html', {
+        'form': form,
+        'is_edit': True,
+        'expense': expense,
+    })
+
+@allow_expenses
+def delete_expense(request, expense_id):
+    expense = get_object_or_404(Expense, pk=expense_id)
+    if request.method == 'POST':
+        if expense.attachment:
+            expense.attachment.delete(save=False)
+        expense.delete()
+        messages.success(request, "Expense deleted successfully.")
+    return redirect('expense_list')
 
 from django.shortcuts import render
 from django.utils.timezone import localtime
@@ -5635,6 +6191,25 @@ def activity_log_view(request):
     sessions = []
     open_sessions = {}
 
+    def resolve_role(log):
+        if log.role:
+            return log.role
+
+        user_obj = log.user or User.objects.filter(username=log.username).first()
+        if not user_obj:
+            return "N/A"
+
+        if user_obj.is_superuser:
+            return "Admin"
+        if user_obj.is_staff:
+            return "Supervisor"
+
+        group_names = list(user_obj.groups.values_list("name", flat=True))
+        if group_names:
+            return ", ".join(group_names)
+
+        return "Cashier"
+
     for log in qs:
         key = (log.username, log.ip_address)
 
@@ -5649,7 +6224,7 @@ def activity_log_view(request):
 
             sessions.append({
                 "username": login_log.username,
-                "role": login_log.role,
+                "role": resolve_role(login_log),
                 "login_time": login_log.created_at.strftime("%d-%m-%Y %H:%M:%S"),
                 "logout_time": log.created_at.strftime("%d-%m-%Y %H:%M:%S"),
                 "duration": duration_str,
@@ -5662,7 +6237,7 @@ def activity_log_view(request):
     for login_log in open_sessions.values():
         sessions.append({
             "username": login_log.username,
-            "role": login_log.role,
+            "role": resolve_role(login_log),
             "login_time": login_log.created_at.strftime("%d-%m-%Y %H:%M:%S"),
             "logout_time": None,
             "duration": None,
@@ -5679,8 +6254,10 @@ def activity_log_view(request):
     page_number = request.GET.get("page")
     page_obj = paginator.get_page(page_number)
 
+    users = User.objects.values_list("username", flat=True).order_by("username")
     context = {
         "sessions": page_obj,
+        "user_list": users,
     }
 
     return render(request, "activity_log.html", context)
@@ -5694,3 +6271,192 @@ def _format_duration(duration: timedelta) -> str:
     if hours > 0:
         return f"{hours}h {minutes}m"
     return f"{minutes}m"
+
+from django.shortcuts import render, redirect
+from django.contrib import messages
+from MahilMartPOS_App.models import EmailConfig, EmailLog
+from django.contrib.auth.decorators import login_required
+from django.views.decorators.http import require_POST
+from django.core.validators import validate_email
+from django.core.exceptions import ValidationError
+from django.db.utils import OperationalError, ProgrammingError
+
+
+@login_required
+def email_settings_view(request):
+    config = EmailConfig.objects.filter(is_active=True).first()
+
+    if request.method == "POST":
+        email_host = (request.POST.get("email_host") or "").strip()
+        email_port_raw = (request.POST.get("email_port") or "").strip()
+        use_tls = request.POST.get("use_tls") == "on"
+        email_user = (request.POST.get("email_host_user") or "").strip()
+        email_pass = (request.POST.get("email_host_password") or "").strip()
+        default_from = (request.POST.get("default_from_email") or "").strip()
+        alert_recipients = (request.POST.get("alert_recipients") or "").strip()
+
+        if not email_port_raw.isdigit():
+            messages.error(request, "Email port must be a valid number.")
+            return redirect("email_settings")
+        email_port = int(email_port_raw)
+
+        if config:
+            config.email_host = email_host
+            config.email_port = email_port
+            config.use_tls = use_tls
+            config.email_host_user = email_user
+            if email_pass:
+                config.email_host_password = email_pass
+            config.default_from_email = default_from
+            config.alert_recipients = alert_recipients
+            config.is_active = True
+            config.save()
+            EmailConfig.objects.exclude(pk=config.pk).update(is_active=False)
+        else:
+            if not email_pass:
+                messages.error(request, "Email password is required for new configuration.")
+                return redirect("email_settings")
+            EmailConfig.objects.all().update(is_active=False)
+            EmailConfig.objects.create(
+                email_host=email_host,
+                email_port=email_port,
+                use_tls=use_tls,
+                email_host_user=email_user,
+                email_host_password=email_pass,
+                default_from_email=default_from,
+                alert_recipients=alert_recipients,
+                is_active=True
+            )
+
+        apply_email_settings()
+        messages.success(request, "Email settings saved successfully.")
+        return redirect("email_settings")
+
+    return render(request, "email_settings.html", {
+        "config": config
+    })
+
+
+def _safe_log_email(**kwargs):
+    try:
+        EmailLog.objects.create(**kwargs)
+    except Exception as exc:
+        print("Email log failed:", exc)
+
+
+@login_required
+def email_view_page(request):
+    config = EmailConfig.objects.filter(is_active=True).first()
+    return render(request, "email_view.html", {
+        "config": config
+    })
+
+
+@login_required
+def email_logs_view(request):
+    try:
+        logs = EmailLog.objects.all().order_by("-created_at")[:200]
+        log_error = None
+    except (OperationalError, ProgrammingError) as exc:
+        logs = []
+        log_error = f"Email log table is not ready. Run migrations. ({exc})"
+
+    return render(request, "email_logs.html", {
+        "logs": logs,
+        "log_error": log_error
+    })
+
+
+@login_required
+def email_preview_view(request):
+    config = EmailConfig.objects.filter(is_active=True).first()
+    recipients = []
+    if config and config.alert_recipients:
+        recipients = [e.strip() for e in config.alert_recipients.split(",") if e.strip()]
+    if not recipients and config:
+        fallback = config.default_from_email or config.email_host_user
+        if fallback:
+            recipients = [fallback]
+    if not recipients:
+        recipients = [email for _, email in settings.ADMINS] if getattr(settings, "ADMINS", None) else []
+
+    from_email = None
+    if config:
+        from_email = config.default_from_email or config.email_host_user
+    if not from_email:
+        from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(settings, "EMAIL_HOST_USER", None)
+
+    return render(request, "email_preview.html", {
+        "config": config,
+        "from_email": from_email,
+        "recipients_display": ", ".join(recipients) if recipients else "Not configured"
+    })
+
+
+@require_POST
+@login_required
+def email_test_view(request):
+    test_email = (request.POST.get("email") or "").strip()
+    if not test_email:
+        return JsonResponse({"success": False, "message": "Email address is required."}, status=400)
+
+    try:
+        validate_email(test_email)
+    except ValidationError:
+        return JsonResponse({"success": False, "message": "Please enter a valid email address."}, status=400)
+
+    config = EmailConfig.objects.filter(is_active=True).first()
+    if not config:
+        return JsonResponse({"success": False, "message": "Email settings are not configured."}, status=400)
+
+    apply_email_settings()
+
+    from_email = (
+        config.default_from_email
+        or config.email_host_user
+        or getattr(settings, "DEFAULT_FROM_EMAIL", None)
+        or getattr(settings, "EMAIL_HOST_USER", None)
+    )
+    if not from_email:
+        return JsonResponse({"success": False, "message": "Default From Email is missing."}, status=400)
+
+    subject = "MahilMart POS - Test Email"
+    html_message = f"""
+    <div style="font-family: Arial, sans-serif; padding: 16px;">
+        <h2 style="color:#2563eb;">Email Test Successful</h2>
+        <p>This is a test email from <strong>MahilMart POS</strong>.</p>
+        <p>Recipient: {test_email}</p>
+    </div>
+    """
+
+    try:
+        email = EmailMultiAlternatives(
+            subject=subject,
+            body="Test email from MahilMart POS.",
+            from_email=from_email,
+            to=[test_email],
+        )
+        email.attach_alternative(html_message, "text/html")
+        email.send(fail_silently=False)
+        _safe_log_email(
+            event_type="test",
+            subject=subject,
+            recipients=test_email,
+            status="sent",
+            triggered_by=request.user,
+            request_path=request.path,
+            ip_address=request.META.get("REMOTE_ADDR"),
+        )
+        return JsonResponse({"success": True, "message": f"Test email sent to {test_email}."})
+    except Exception as e:
+        _safe_log_email(
+            event_type="test",
+            subject=subject,
+            recipients=test_email,
+            status="failed",
+            error_message=str(e),
+            triggered_by=request.user,
+            request_path=request.path,
+            ip_address=request.META.get("REMOTE_ADDR"),
+        )
+        return JsonResponse({"success": False, "message": f"Failed to send test email. {e}"}, status=500)

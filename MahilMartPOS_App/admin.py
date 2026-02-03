@@ -10,10 +10,89 @@ from .models import Company, CompanyActivity
 class CategoryAdmin(admin.ModelAdmin):
     list_display = ('name',)
 
+from django.contrib import admin
+from .models import Supplier
+
+
 @admin.register(Supplier)
 class SupplierAdmin(admin.ModelAdmin):
-    list_display = ('name', 'contact_person', 'phone', 'email')
-    search_fields = ('name', 'contact_person')
+    # Columns shown in admin list
+    list_display = (
+        "supplier_id",
+        "name",
+        "contact_person",
+        "phone",
+        "email",
+        "status",
+    )
+
+    # Search box fields
+    search_fields = (
+        "supplier_id",
+        "name",
+        "contact_person",
+        "phone",
+        "email",
+    )
+
+    # Filters on right sidebar
+    list_filter = (
+        "status",
+    )
+
+    # Default ordering
+    ordering = (
+        "supplier_id",
+    )
+
+    # Read-only fields (IMPORTANT)
+    readonly_fields = (
+        "supplier_id",
+    )
+
+    # Pagination
+    list_per_page = 25
+
+    # Field layout inside edit page
+    fieldsets = (
+        ("Supplier Info", {
+            "fields": (
+                "supplier_id",
+                "name",
+                "status",
+            )
+        }),
+        ("Contact Details", {
+            "fields": (
+                "contact_person",
+                "phone",
+                "email",
+                "address",
+            )
+        }),
+        ("Business Details", {
+            "fields": (
+                "gst_number",
+                "fssai_number",
+                "pan_number",
+                "credit_terms",
+                "opening_balance",
+            )
+        }),
+        ("Bank Details", {
+            "fields": (
+                "bank_name",
+                "account_number",
+                "ifsc_code",
+            )
+        }),
+        ("Notes", {
+            "fields": (
+                "notes",
+            )
+        }),
+    )
+
 
 @admin.register(Customer)
 class CustomerAdmin(admin.ModelAdmin):

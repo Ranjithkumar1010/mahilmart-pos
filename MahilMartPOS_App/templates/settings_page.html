@@ -13,6 +13,7 @@
     --text-muted: #adb5bd;
     --shadow-sm: 0 2px 8px rgba(0,0,0,0.08);
     --shadow-md: 0 4px 12px rgba(0,0,0,0.12);
+    --transition: all 0.2s ease;
 }
 
 /* Page wrapper */
@@ -112,12 +113,50 @@
 
     <div class="settings-title">Settings</div>
     <div class="settings-sub">
-        Manage POS computers, theme colors, cashier controls & admin details.
+        Manage all system, company, and security settings from one place.
     </div>
 
     <div class="settings-grid">
 
-        <!-- 1️⃣ Computer Alias -->
+        {% if request.user.is_superuser or perm.allow_config_view %}
+        <div class="settings-card-box" onclick="location.href='{% url 'add' %}'">
+            <div class="settings-icon">
+                <i class="fa fa-file-invoice-dollar"></i>
+            </div>
+            <div class="settings-card-title">Config View</div>
+            <div class="settings-card-text">
+                Bill types, payment modes, points & billing configuration.
+            </div>
+            <span class="settings-card-link">Open <i class="fa fa-arrow-right"></i></span>
+        </div>
+        {% endif %}
+
+        {% if request.user.is_superuser or perm.allow_logs %}
+        <div class="settings-card-box" onclick="location.href='{% url 'activity_log' %}'">
+            <div class="settings-icon">
+                <i class="fa fa-history"></i>
+            </div>
+            <div class="settings-card-title">Activity Logs</div>
+            <div class="settings-card-text">
+                Track user logins, sessions, and system activity.
+            </div>
+            <span class="settings-card-link">View <i class="fa fa-arrow-right"></i></span>
+        </div>
+        {% endif %}
+
+        {% if request.user.is_superuser or perm.allow_company %}
+        <div class="settings-card-box" onclick="location.href='{% url 'company_details' %}'">
+            <div class="settings-icon">
+                <i class="fa fa-info-circle"></i>
+            </div>
+            <div class="settings-card-title">Company Info</div>
+            <div class="settings-card-text">
+                Business details, tax settings, bank and license info.
+            </div>
+            <span class="settings-card-link">Open <i class="fa fa-arrow-right"></i></span>
+        </div>
+        {% endif %}
+
         <div class="settings-card-box" onclick="location.href='{% url 'computer_alias' %}'">
             <div class="settings-icon">
                 <i class="fa fa-desktop"></i>
@@ -129,7 +168,6 @@
             <span class="settings-card-link">Configure <i class="fa fa-arrow-right"></i></span>
         </div>
 
-        <!-- 2️⃣ POS Theme -->
         <div class="settings-card-box" onclick="location.href='{% url 'pos_theme' %}'">
             <div class="settings-icon">
                 <i class="fa fa-palette"></i>
@@ -141,22 +179,20 @@
             <span class="settings-card-link">Customize <i class="fa fa-arrow-right"></i></span>
         </div>
 
-        <!-- 3️⃣ User Restrictions for Staff and Cashier -->
         <div class="settings-card-box" onclick="location.href='{% url 'permission_settings' %}'">
             <div class="settings-icon">
                 <i class="fa fa-user-shield"></i>
             </div>
             <div class="settings-card-title">User Restrictions</div>
             <div class="settings-card-text">
-                Manage User access
+                Manage user access
             </div>
             <span class="settings-card-link">Manage <i class="fa fa-arrow-right"></i></span>
         </div>
 
-        <!-- 4️⃣ Admin Settings -->
         <div class="settings-card-box" onclick="location.href='{% url 'user' %}'">
             <div class="settings-icon">
-                <i class="fa fa-store"></i>
+                <i class="fa fa-user-cog"></i>
             </div>
             <div class="settings-card-title">Admin Settings</div>
             <div class="settings-card-text">
@@ -165,30 +201,42 @@
             <span class="settings-card-link">Open <i class="fa fa-arrow-right"></i></span>
         </div>
 
-        <!-- 5️⃣ Admin Settings -->
         <div class="settings-card-box" onclick="location.href='{% url 'points_config' %}'">
             <div class="settings-icon">
-                <i class="fa fa-store"></i>
+                <i class="fa fa-coins"></i>
             </div>
             <div class="settings-card-title">Point Config Page</div>
             <div class="settings-card-text">
-                Point Config_tool
+                Loyalty points configuration.
             </div>
             <span class="settings-card-link">Open <i class="fa fa-arrow-right"></i></span>
         </div>
 
         <div class="settings-card-box" onclick="location.href='{% url 'company_name_settings' %}'">
             <div class="settings-icon">
-                <i class="fa fa-store"></i>
+                <i class="fa fa-building"></i>
             </div>
             <div class="settings-card-title">Company Name Settings</div>
             <div class="settings-card-text">
-                Company Name Settings
+                Organization identity and branding.
             </div>
             <span class="settings-card-link">Open <i class="fa fa-arrow-right"></i></span>
         </div>
+
+        <div class="settings-card-box" onclick="location.href='{% url 'email_settings' %}'">
+            <div class="settings-icon">
+                <i class="fa fa-envelope"></i>
+            </div>
+            <div class="settings-card-title">Email Settings</div>
+            <div class="settings-card-text">
+                Outgoing email configuration.
+            </div>
+            <span class="settings-card-link">Open <i class="fa fa-arrow-right"></i></span>
+        </div>
+
     </div>
 
 </div>
 
 {% endblock %}
+

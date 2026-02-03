@@ -3,148 +3,479 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Welcome | MahilMart POS</title>
+  <title>Welcome | {{ app_name|default:"MY APP" }}</title>
 
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
 <style>
+    :root {
+      --primary: #2e3b4e;
+      --primary-dark: #1c2532;
+      --primary-light: #4a5b78;
+      --secondary: #6c63ff;
+      --accent: #36d1dc;
+      --success: #4ade80;
+      --light-bg: #f8fafc;
+      --card-bg: rgba(255, 255, 255, 0.95);
+      --text-primary: #1e293b;
+      --text-secondary: #64748b;
+      --border-color: #e2e8f0;
+      --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.05);
+      --shadow-md: 0 10px 25px rgba(0, 0, 0, 0.08);
+      --shadow-lg: 0 20px 40px rgba(0, 0, 0, 0.12);
+      --transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
     html, body {
       height: 100%;
       margin: 0;
-      font-family: 'Segoe UI', sans-serif;
-      background: linear-gradient(135deg, #f4f6f9, #e2ecf3);
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
+      font-family: 'Inter', 'Segoe UI', sans-serif;
+      background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+      overflow-x: hidden;
+      color: var(--text-primary);
     }
 
-    .app-header {
-      background-color: #2e3b4e;
-      color: white;
-      padding: 15px 20px;
-      text-align: center;
-      font-size: 1.6rem;
-      font-weight: bold;
-      letter-spacing: 1px;
-      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-    }
-
-    .login-container {
-      flex-grow: 1;
+    .app-container {
+      min-height: 100vh;
       display: flex;
       flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      animation: fadeIn 0.8s ease-in-out;
       position: relative;
     }
 
-    .logo-circle {
-      background-color: #2e3b4e;
-      color: white;
+    /* Animated background elements */
+    .bg-shapes {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: -1;
+      overflow: hidden;
+    }
+
+    .shape {
+      position: absolute;
       border-radius: 50%;
-      width: 80px;
-      height: 80px;
+      background: linear-gradient(135deg, var(--secondary) 0%, var(--accent) 100%);
+      opacity: 0.03;
+    }
+
+    .shape-1 {
+      width: 400px;
+      height: 400px;
+      top: -150px;
+      right: -100px;
+    }
+
+    .shape-2 {
+      width: 300px;
+      height: 300px;
+      bottom: -100px;
+      left: -50px;
+    }
+
+    .shape-3 {
+      width: 200px;
+      height: 200px;
+      top: 40%;
+      left: 10%;
+    }
+
+    /* Time & Date Display */
+    .time-date-container {
+      position: absolute;
+      top: 20px;
+      right: 30px;
+      z-index: 100;
+      text-align: right;
+      color: var(--primary);
+      background: rgba(255, 255, 255, 0.85);
+      backdrop-filter: blur(10px);
+      padding: 12px 20px;
+      border-radius: 16px;
+      box-shadow: var(--shadow-md);
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      min-width: 180px;
+    }
+
+    .time-display {
+      font-size: 2.2rem;
+      font-weight: 700;
+      line-height: 1;
+      color: var(--primary-dark);
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -1px;
+    }
+
+    .date-display {
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      margin-top: 5px;
+      font-weight: 500;
+    }
+
+    .time-icon {
+      color: var(--accent);
+      margin-right: 8px;
+      font-size: 1.2rem;
+    }
+
+    .app-header {
+      background: var(--primary);
+      color: white;
+      padding: 18px 30px;
+      text-align: center;
+      font-size: 1.8rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      box-shadow: var(--shadow-md);
+      position: relative;
+      z-index: 10;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 2rem;
+      gap: 12px;
+    }
+
+    .app-header i {
+      color: var(--accent);
+      font-size: 1.6rem;
+    }
+
+    .login-wrapper {
+      flex-grow: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+      position: relative;
+      animation: fadeIn 0.8s ease-in-out;
+    }
+
+    .login-card {
+      background: var(--card-bg);
+      backdrop-filter: blur(10px);
+      border-radius: 24px;
+      box-shadow: var(--shadow-lg);
+      width: 100%;
+      max-width: 480px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      position: relative;
+      animation: slideUp 0.8s ease;
+    }
+
+    .card-header {
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+      color: white;
+      padding: 40px 30px 30px;
+      text-align: center;
+      position: relative;
+    }
+
+    .card-header::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 4px;
+      background: linear-gradient(90deg, var(--accent) 0%, var(--secondary) 100%);
+    }
+
+    .logo-container {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
       margin-bottom: 20px;
-      animation: bounce 1.5s infinite ease-in-out;
+    }
+
+    .logo-circle {
+      background: linear-gradient(135deg, var(--accent) 0%, var(--secondary) 100%);
+      color: white;
+      border-radius: 50%;
+      width: 70px;
+      height: 70px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.8rem;
+      box-shadow: 0 8px 20px rgba(108, 99, 255, 0.3);
+    }
+
+    .logo-text {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    .logo-text h1 {
+      font-size: 1.8rem;
+      font-weight: 700;
+      margin: 0;
+    }
+
+    .logo-text span {
+      font-size: 0.9rem;
+      opacity: 0.9;
+      font-weight: 400;
     }
 
     .welcome-text {
       text-align: center;
-      margin-bottom: 30px;
+      margin-top: 10px;
+      position: relative;
     }
 
-    .welcome-text h2 {
-      font-size: 2rem;
-      color: #2e3b4e;
+    .greeting-container {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
       margin-bottom: 8px;
     }
 
-    .welcome-text p {
-      font-size: 1rem;
-      color: #555;
+    .welcome-text h2 {
+      font-size: 1.8rem;
+      color: white;
+      margin-bottom: 6px;
+      font-weight: 600;
     }
 
-    .login-form {
-      background: white;
-      padding: 30px;
-      border-radius: 12px;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-      width: 100%;
-      max-width: 420px;
-      animation: slideUp 0.8s ease;
+    .welcome-text p {
+      font-size: 0.95rem;
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .current-time-small {
+      font-size: 0.85rem;
+      background: rgba(255, 255, 255, 0.15);
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-weight: 500;
+      margin-top: 5px;
+      display: inline-block;
+    }
+
+    .card-body {
+      padding: 40px 35px;
     }
 
     .login-form h3 {
       text-align: center;
-      margin-bottom: 20px;
-      color: #2e3b4e;
+      margin-bottom: 30px;
+      color: var(--primary);
+      font-size: 1.5rem;
+      font-weight: 600;
     }
 
-    .login-form label {
+    .form-group {
+      margin-bottom: 24px;
+      position: relative;
+    }
+
+    .form-group label {
+      display: block;
       font-weight: 500;
-      margin-top: 10px;
+      margin-bottom: 8px;
+      color: var(--text-primary);
+      font-size: 0.95rem;
+    }
+
+    .input-with-icon {
+      position: relative;
+    }
+
+    .input-with-icon i {
+      position: absolute;
+      left: 16px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-secondary);
+      font-size: 1.1rem;
     }
 
     .login-form input {
       width: 100%;
-      padding: 10px;
-      margin-bottom: 15px;
-      border: 1px solid #ccc;
-      border-radius: 5px;
+      padding: 14px 16px 14px 50px;
+      border: 2px solid var(--border-color);
+      border-radius: 12px;
       font-size: 15px;
+      font-family: 'Inter', sans-serif;
+      background-color: white;
+      transition: var(--transition);
+      color: var(--text-primary);
+    }
+
+    .login-form input:focus {
+      outline: none;
+      border-color: var(--primary-light);
+      box-shadow: 0 0 0 3px rgba(46, 59, 78, 0.1);
+    }
+
+    .form-options {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 30px;
+      flex-wrap: wrap;
     }
 
     .checkbox-container {
       display: flex;
-      justify-content: space-between;
       align-items: center;
-      margin-bottom: 20px;
+      gap: 8px;
+      cursor: pointer;
     }
 
-    .login-form button {
+    .checkbox-container input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+      accent-color: var(--primary);
+    }
+
+    .checkbox-container span {
+      font-size: 0.95rem;
+      color: var(--text-secondary);
+      user-select: none;
+    }
+
+    .forgot-password {
+      font-size: 0.95rem;
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 500;
+      transition: var(--transition);
+    }
+
+    .forgot-password:hover {
+      color: var(--primary-dark);
+      text-decoration: underline;
+    }
+
+    .login-btn {
       width: 100%;
-      padding: 12px;
-      background-color: #2e3b4e;
+      padding: 16px;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
       color: white;
       border: none;
-      border-radius: 4px;
+      border-radius: 12px;
       font-size: 16px;
-      transition: all 0.3s ease-in-out;
+      font-weight: 600;
+      cursor: pointer;
+      transition: var(--transition);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      box-shadow: 0 6px 15px rgba(46, 59, 78, 0.2);
     }
 
-    .login-form button:hover {
-      background-color: #1c2532;
-      transform: scale(1.02);
+    .login-btn:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 10px 20px rgba(46, 59, 78, 0.25);
+      background: linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 100%);
     }
 
-    .error {
-      color: red;
-      text-align: center;
-      margin-top: 10px;
+    .login-btn:active {
+      transform: translateY(-1px);
     }
 
-    .content-footer {
-      background-color: #2e3b4e;
+    .divider {
+      display: flex;
+      align-items: center;
+      margin: 30px 0;
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+    }
+
+    .divider::before, .divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border-color);
+    }
+
+    .divider span {
+      padding: 0 15px;
+    }
+
+    .features {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 15px;
+      margin-top: 30px;
+    }
+
+    .feature-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+    }
+
+    .feature-item i {
+      color: var(--success);
+      font-size: 1rem;
+    }
+
+    .app-footer {
+      background: var(--primary);
       color: white;
+      padding: 18px 30px;
       text-align: center;
-      padding: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
       font-size: 0.9rem;
+      flex-wrap: wrap;
     }
 
-    a {
-      color: #2e3b4e;
-      font-size: 0.9rem;
-      text-decoration: none;
+    .footer-left, .footer-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
-    a:hover {
-      text-decoration: underline;
+    .footer-left i, .footer-right i {
+      color: var(--accent);
+    }
+
+    .error-message {
+      background-color: rgba(239, 68, 68, 0.1);
+      color: #dc2626;
+      padding: 12px 16px;
+      border-radius: 10px;
+      margin-bottom: 20px;
+      border-left: 4px solid #dc2626;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.95rem;
+    }
+
+    .success-message {
+      background-color: rgba(34, 197, 94, 0.1);
+      color: #16a34a;
+      padding: 12px 16px;
+      border-radius: 10px;
+      margin-bottom: 20px;
+      border-left: 4px solid #16a34a;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.95rem;
     }
 
     @keyframes fadeIn {
@@ -157,157 +488,372 @@
       to { transform: translateY(0); opacity: 1; }
     }
 
-    @keyframes bounce {
-      0%, 100% { transform: translateY(0); }
-      50% { transform: translateY(-8px); }
+    @keyframes pulse {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.05); }
+      100% { transform: scale(1); }
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    @media (max-width: 768px) {
+      .app-header, .app-footer {
+        flex-direction: column;
+        gap: 10px;
+        text-align: center;
+      }
+
+      .login-card {
+        max-width: 90%;
+      }
+
+      .card-body {
+        padding: 30px 25px;
+      }
+
+      .features {
+        grid-template-columns: 1fr;
+      }
+
+      .time-date-container {
+        position: relative;
+        top: 0;
+        right: 0;
+        width: 100%;
+        max-width: 300px;
+        margin: 0 auto 20px;
+        text-align: center;
+      }
+
+      .time-display {
+        font-size: 1.8rem;
+      }
     }
 
     @media (max-width: 500px) {
-      .login-form {
-        padding: 20px;
+      .login-card {
+        max-width: 95%;
       }
 
-      .logo-circle {
-        width: 60px;
-        height: 60px;
-        font-size: 1.5rem;
+      .card-body {
+        padding: 25px 20px;
+      }
+
+      .form-options {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 15px;
+      }
+
+      .logo-container {
+        flex-direction: column;
+        text-align: center;
+      }
+
+      .logo-text {
+        align-items: center;
+      }
+
+      .time-date-container {
+        padding: 10px 15px;
+        min-width: 150px;
+      }
+
+      .time-display {
+        font-size: 1.6rem;
       }
     }
-
-    .checkbox-container {
-  display: flex;
-  align-items: center;
-  white-space: nowrap;
-}
-
-.checkbox-container label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.checkbox-container input[type="checkbox"] {
-  margin: 0;
-  padding: 0;
-  appearance: none;
-  width: 16px;
-  height: 16px;
-  border: 1px solid #333;
-  display: inline-block;
-  position: relative;
-}
-
-.checkbox-container input[type="checkbox"] {
-  appearance: checkbox;
-}
-
-  </style>
+</style>
 </head>
 
 <body>
 
-<header class="app-header">MahilMart POS</header>
-
-<div class="login-container">
-
-  <!-- 🔥 Logout or system messages -->
-  {% if messages %}
-  <div class="container mb-3" style="max-width: 420px;">
-      {% for msg in messages %}
-          <div class="alert alert-{{ msg.tags }} alert-dismissible fade show" role="alert">
-              <strong>{{ msg }}</strong>
-              <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-          </div>
-      {% endfor %}
+<div class="app-container">
+  
+  <!-- Animated background shapes -->
+  <div class="bg-shapes">
+    <div class="shape shape-1"></div>
+    <div class="shape shape-2"></div>
+    <div class="shape shape-3"></div>
   </div>
-  {% endif %}
 
-  <div class="logo-circle"><i class="fas fa-store"></i></div>
+  <!-- Real-time Clock & Date Display -->
+  <div class="time-date-container">
+    <div class="time-display" id="liveClock">00:00:00</div>
+    <div class="date-display">
+      <i class="fas fa-calendar-alt time-icon"></i>
+      <span id="liveDate">Loading...</span>
+    </div>
+  </div>
 
-  <h2 id="greeting">Welcome</h2>
+  <header class="app-header">
+    <i class="fas fa-cash-register"></i>
+    <span>{{ app_name|default:"MY APP" }}</span>
+  </header>
 
-  <div class="login-form">
+  <div class="login-wrapper">
+    
+    <!-- Messages -->
+    {% if messages %}
+    <div class="container mb-4" style="max-width: 480px;">
+        {% for msg in messages %}
+            <div class="alert alert-{{ msg.tags }} alert-dismissible fade show" role="alert" style="border-radius: 12px;">
+                <i class="fas fa-{% if msg.tags == 'success' %}check-circle{% else %}exclamation-circle{% endif %} me-2"></i>
+                <strong>{{ msg }}</strong>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        {% endfor %}
+    </div>
+    {% endif %}
 
-    <h3 class="text-center">Sign In</h3>
-
-    <form method="post">
-      {% csrf_token %}
-
-      <label>Username</label>
-      <input type="text" name="username" required value="{{ username|default:'' }}">
-
-      <label>Password</label>
-      <input type="password" name="password" id="password" required>
-
-      <div class="checkbox-container">
-        <input type="checkbox" onclick="togglePassword()"> Show Password
+    <div class="login-card">
+      
+      <div class="card-header">
+        <div class="logo-container">
+          <div class="logo-circle">
+            <i class="fas fa-store"></i>
+          </div>
+          <div class="logo-text">
+            <h1>{{ app_name|default:"MY APP" }}</h1>
+            <span>{{ app_tagline|default:"Enterprise Retail System" }}</span>
+          </div>
+        </div>
+        
+        <div class="welcome-text">
+          <div class="greeting-container">
+            <h2 id="greeting">Welcome Back</h2>
+          </div>
+          <p>Sign in to access your dashboard and manage your store</p>
+          <div class="current-time-small" id="smallTime">
+            <i class="fas fa-clock me-1"></i>
+            <span id="currentTimeSmall">00:00</span>
+          </div>
+        </div>
       </div>
 
-      <button type="submit" class="btn btn-dark w-100 mt-2">Login</button>
+      <div class="card-body">
+        
+        <div class="login-form">
+          <h3>Secure Authentication</h3>
 
-      {% if error %}
-        <p class="text-danger text-center mt-2">{{ error }}</p>
-      {% endif %}
-    </form>
+          <form method="post">
+            {% csrf_token %}
 
+            {% if error %}
+            <div class="error-message">
+              <i class="fas fa-exclamation-triangle"></i>
+              <span>{{ error }}</span>
+            </div>
+            {% endif %}
+
+            <div class="form-group">
+              <label for="username">Username</label>
+              <div class="input-with-icon">
+                <i class="fas fa-user"></i>
+                <input type="text" id="username" name="username" required value="{{ username|default:'' }}" placeholder="Enter your username">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="password">Password</label>
+              <div class="input-with-icon">
+                <i class="fas fa-lock"></i>
+                <input type="password" id="password" name="password" required placeholder="Enter your password">
+                <i class="fas fa-eye toggle-password" style="left: auto; right: 16px; cursor: pointer;" onclick="togglePassword()"></i>
+              </div>
+            </div>
+
+            <div class="form-options">
+              <div class="checkbox-container">
+                <input type="checkbox" id="showPassword" onclick="togglePassword()">
+                <span>Show Password</span>
+              </div>
+              <a href="#" class="forgot-password">Forgot Password?</a>
+            </div>
+
+            <button type="submit" class="login-btn">
+              <i class="fas fa-sign-in-alt"></i>
+              <span>Login to Dashboard</span>
+            </button>
+
+            <div class="divider">
+              <span>System Features</span>
+            </div>
+
+            <div class="features">
+              <div class="feature-item">
+                <i class="fas fa-check-circle"></i>
+                <span>Real-time Inventory</span>
+              </div>
+              <div class="feature-item">
+                <i class="fas fa-check-circle"></i>
+                <span>Sales Analytics</span>
+              </div>
+              <div class="feature-item">
+                <i class="fas fa-check-circle"></i>
+                <span>Customer Management</span>
+              </div>
+              <div class="feature-item">
+                <i class="fas fa-check-circle"></i>
+                <span>Multi-store Support</span>
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
   </div>
+
+  <footer class="app-footer">
+    <div class="footer-left">
+      <i class="fas fa-clock"></i>
+      <span id="footerTime">--:--:--</span>
+    </div>
+    <div class="footer-center">
+      <i class="fas fa-cube"></i>
+      <span>{{ app_name|default:"MY APP" }} {{ app_version|default:"v2.0.0" }}</span>
+    </div>
+    <div class="footer-right">
+      <i class="far fa-copyright"></i>
+      <span>2025 SuperMart Solutions Inc.</span>
+    </div>
+  </footer>
 </div>
 
-<footer class="content-footer d-flex justify-content-between">
-  <div>MahilMart Pro v1.0.0</div>
-  <div>© 2025 SuperMart Solutions Inc.</div>
-</footer>
-
-<!-- Password Toggle -->
-<script>
-function togglePassword() {
-  const pwd = document.getElementById("password");
-  pwd.type = pwd.type === "password" ? "text" : "password";
-}
-</script>
-
-<!-- Greeting based on time -->
-<script>
-const greetingText = document.getElementById("greeting");
-const hour = new Date().getHours();
-
-if (hour < 12) greetingText.innerText = "Good Morning ☀️";
-else if (hour < 15) greetingText.innerText = "Good Afternoon 🌤️";
-else greetingText.innerText = "Good Evening 🌙";
-</script>
-
-<!-- Machine ID Generator -->
-<script>
-function generateUUID() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-        const r = Math.random() * 16 | 0;
-        const v = c === 'x' ? r : (r & 0x3 | 8);
-        return v.toString(16);
-    });
-}
-
-document.addEventListener("DOMContentLoaded", () => {
-    let id = localStorage.getItem("POS_DEVICE_ID");
-
-    if (!id) {
-        id = "POS-" + generateUUID();
-        localStorage.setItem("POS_DEVICE_ID", id);
-    }
-
-    document.getElementById("browser_machine_id").value = id;
-});
-</script>
-
+<!-- Hidden field for machine ID -->
 <input type="hidden" id="browser_machine_id" name="browser_machine_id">
 
-<!-- Auto-hide messages -->
+<!-- JavaScript -->
 <script>
-setTimeout(() => {
-  document.querySelectorAll('.alert').forEach(alert => {
-      alert.classList.remove('show');
-      setTimeout(() => alert.remove(), 300);
+  // Toggle password visibility
+  function togglePassword() {
+    const pwd = document.getElementById("password");
+    const eyeIcon = document.querySelector('.toggle-password');
+    
+    if (pwd.type === "password") {
+      pwd.type = "text";
+      eyeIcon.classList.remove('fa-eye');
+      eyeIcon.classList.add('fa-eye-slash');
+    } else {
+      pwd.type = "password";
+      eyeIcon.classList.remove('fa-eye-slash');
+      eyeIcon.classList.add('fa-eye');
+    }
+  }
+
+  // Format time with leading zeros
+  function formatTime(value) {
+    return value < 10 ? `0${value}` : value;
+  }
+
+  // Update clock and date in real-time
+  function updateDateTime() {
+    const now = new Date();
+    
+    // Get time components
+    const hours = now.getHours();
+    const minutes = now.getMinutes();
+    const seconds = now.getSeconds();
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    const displayHours = hours % 12 || 12;
+    
+    // Format date
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    
+    const dayName = days[now.getDay()];
+    const monthName = months[now.getMonth()];
+    const date = now.getDate();
+    const year = now.getFullYear();
+    
+    // Update main clock
+    document.getElementById('liveClock').textContent = 
+      `${formatTime(displayHours)}:${formatTime(minutes)}:${formatTime(seconds)}`;
+    
+    // Update date
+    document.getElementById('liveDate').textContent = 
+      `${dayName}, ${monthName} ${date}, ${year}`;
+    
+    // Update small time in welcome section
+    document.getElementById('currentTimeSmall').textContent = 
+      `${formatTime(displayHours)}:${formatTime(minutes)} ${ampm}`;
+    
+    // Update footer time
+    document.getElementById('footerTime').textContent = 
+      `${formatTime(hours)}:${formatTime(minutes)}:${formatTime(seconds)}`;
+    
+    // Update greeting based on time
+    const greetingText = document.getElementById("greeting");
+    let greeting = "";
+    let emoji = "";
+    
+    if (hours < 12) {
+      greeting = "Good Morning";
+      emoji = "☀️";
+    } else if (hours < 17) {
+      greeting = "Good Afternoon";
+      emoji = "🌤️";
+    } else {
+      greeting = "Good Evening";
+      emoji = "🌙";
+    }
+    
+    greetingText.innerHTML = `${greeting} ${emoji}`;
+    
+    // Add subtle animation to seconds
+    const secondsElement = document.getElementById('liveClock');
+    if (seconds % 2 === 0) {
+      secondsElement.style.color = 'var(--primary-dark)';
+    } else {
+      secondsElement.style.color = 'var(--primary)';
+    }
+  }
+
+  // Generate machine ID if not exists
+  function generateUUID() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+      const r = Math.random() * 16 | 0;
+      const v = c === 'x' ? r : (r & 0x3 | 8);
+      return v.toString(16);
+    });
+  }
+
+  // Initialize on DOM load
+  document.addEventListener("DOMContentLoaded", function() {
+    // Start real-time clock
+    updateDateTime();
+    setInterval(updateDateTime, 1000);
+    
+    // Generate machine ID
+    let id = localStorage.getItem("POS_DEVICE_ID");
+    if (!id) {
+      id = "POS-" + generateUUID();
+      localStorage.setItem("POS_DEVICE_ID", id);
+    }
+    
+    document.getElementById("browser_machine_id").value = id;
+
+    // Animate login button on hover
+    const loginBtn = document.querySelector('.login-btn');
+    loginBtn.addEventListener('mouseenter', function() {
+      this.style.animation = 'pulse 1.5s infinite';
+    });
+    
+    loginBtn.addEventListener('mouseleave', function() {
+      this.style.animation = 'none';
+    });
+
+    // Auto-hide messages after 5 seconds
+    setTimeout(() => {
+      document.querySelectorAll('.alert').forEach(alert => {
+        alert.classList.remove('show');
+        setTimeout(() => alert.remove(), 300);
+      });
+    }, 5000);
   });
-}, 4000);
 </script>
 
 </body>
