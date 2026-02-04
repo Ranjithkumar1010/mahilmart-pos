@@ -169,12 +169,13 @@
     .checkbox-group {
         display: flex;
         align-items: center;
-        gap: 12px;
-        margin: 25px 0;
-        padding: 20px;
-        background: linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%);
-        border-radius: var(--border-radius-sm);
-        border-left: 4px solid var(--info-color);
+        justify-content: space-between;
+        gap: 16px;
+        margin: 18px 0;
+        padding: 18px 20px;
+        background: #f8fafc;
+        border-radius: var(--border-radius-md);
+        border: 1px solid var(--border-color);
     }
 
     .checkbox-label {
@@ -183,41 +184,113 @@
         cursor: pointer;
         display: flex;
         align-items: center;
-        gap: 10px;
+        justify-content: space-between;
+        gap: 16px;
+        width: 100%;
         margin: 0;
+        position: relative;
+    }
+
+    .checkbox-text {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .toggle-input {
+        position: absolute;
+        opacity: 0;
+        width: 0;
+        height: 0;
     }
 
     .checkbox-custom {
         position: relative;
-        width: 24px;
-        height: 24px;
-        background: white;
-        border: 2px solid var(--border-color);
-        border-radius: 6px;
+        width: 46px;
+        height: 26px;
+        background: #cbd5f5;
+        border: 2px solid #cbd5f5;
+        border-radius: 999px;
         cursor: pointer;
-        transition: all 0.3s ease;
+        transition: all 0.2s ease;
+        flex-shrink: 0;
+        margin-left: auto;
     }
 
     .checkbox-custom::after {
         content: '';
         position: absolute;
         top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%) scale(0);
-        width: 12px;
-        height: 12px;
-        background: var(--info-color);
-        border-radius: 3px;
+        left: 3px;
+        transform: translateY(-50%);
+        width: 18px;
+        height: 18px;
+        background: #ffffff;
+        border-radius: 999px;
+        box-shadow: 0 2px 6px rgba(15, 23, 42, 0.15);
         transition: transform 0.2s ease;
     }
 
-    input[type="checkbox"]:checked + .checkbox-custom::after {
-        transform: translate(-50%, -50%) scale(1);
+    .toggle-input:checked + .checkbox-custom {
+        background: var(--info-color);
+        border-color: var(--info-color);
     }
 
-    input[type="checkbox"]:checked + .checkbox-custom {
-        border-color: var(--info-color);
-        background: rgba(59, 130, 246, 0.1);
+    .toggle-input:checked + .checkbox-custom::after {
+        transform: translate(20px, -50%);
+    }
+
+    .checkbox-label:focus-within .checkbox-custom {
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+    }
+
+    /* Current Sending Status */
+    .status-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 16px;
+        margin: 10px 0 25px;
+    }
+
+    .status-item {
+        background: #f8fafc;
+        border: 1px solid var(--border-color);
+        border-radius: var(--border-radius-md);
+        padding: 14px;
+    }
+
+    .status-label {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-secondary);
+        margin-bottom: 6px;
+    }
+
+    .status-value {
+        font-weight: 600;
+        color: var(--text-primary);
+        word-break: break-word;
+    }
+
+    .status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 10px;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 700;
+    }
+
+    .status-pill.success {
+        background: rgba(16, 185, 129, 0.12);
+        color: #047857;
+    }
+
+    .status-pill.muted {
+        background: rgba(148, 163, 184, 0.2);
+        color: #475569;
     }
 
     /* Action Buttons */
@@ -508,10 +581,51 @@
             </h2>
         </div>
 
+        <div class="status-grid">
+            <div class="status-item">
+                <div class="status-label">Sending From</div>
+                <div class="status-value">{{ current_from_email }}</div>
+            </div>
+            <div class="status-item">
+                <div class="status-label">Alert Recipients</div>
+                <div class="status-value">{{ current_recipients }}</div>
+            </div>
+            <div class="status-item">
+                <div class="status-label">Access Denied Alerts</div>
+                <div class="status-value">
+                    {% if access_denied_enabled %}
+                        <span class="status-pill success" id="statusAccessDenied">Enabled</span>
+                    {% else %}
+                        <span class="status-pill muted" id="statusAccessDenied">Disabled</span>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="status-item">
+                <div class="status-label">Low Stock Alerts</div>
+                <div class="status-value">
+                    {% if low_stock_enabled %}
+                        <span class="status-pill success" id="statusLowStock">Enabled</span>
+                    {% else %}
+                        <span class="status-pill muted" id="statusLowStock">Disabled</span>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="status-item">
+                <div class="status-label">Out of Stock Alerts</div>
+                <div class="status-value">
+                    {% if no_stock_enabled %}
+                        <span class="status-pill success" id="statusNoStock">Enabled</span>
+                    {% else %}
+                        <span class="status-pill muted" id="statusNoStock">Disabled</span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
         <form method="post" id="emailConfigForm">
             {% csrf_token %}
             
-            <div class="form-grid">
+        <div class="form-grid">
                 <!-- SMTP Host -->
                 <div class="form-group">
                     <label class="form-label">
@@ -570,7 +684,8 @@
                 <div class="form-group">
                     <label class="form-label">
                         <i class="fas fa-key"></i>
-                        Email Password
+                        Email App Password
+                        <span class="required-star">*</span>
                     </label>
                     <div class="password-toggle">
                         <input type="password" 
@@ -621,21 +736,74 @@
                 </div>
             </div>
 
+            <!-- Alert Toggles -->
+            <div class="checkbox-group">
+                <label class="checkbox-label">
+                    <span class="checkbox-text">
+                        <strong>Access Denied Alert Emails</strong>
+                        <span style="font-size: 0.9rem; color: var(--text-secondary);">
+                            Send an email when someone tries to open a restricted page.
+                        </span>
+                    </span>
+                    <input type="checkbox" 
+                           name="access_denied_alert_enabled" 
+                           id="access_denied_alert_enabled"
+                           class="toggle-input"
+                           {% if not config or config.access_denied_alert_enabled %}checked{% endif %}>
+                    <span class="checkbox-custom" aria-hidden="true"></span>
+                </label>
+            </div>
+
+            <div class="checkbox-group">
+                <label class="checkbox-label">
+                    <span class="checkbox-text">
+                        <strong>Low Stock Alert Emails</strong>
+                        <span style="font-size: 0.9rem; color: var(--text-secondary);">
+                            Send an email when items go below the low stock threshold.
+                        </span>
+                    </span>
+                    <input type="checkbox" 
+                           name="low_stock_alert_enabled" 
+                           id="low_stock_alert_enabled"
+                           class="toggle-input"
+                           {% if not config or config.low_stock_alert_enabled %}checked{% endif %}>
+                    <span class="checkbox-custom" aria-hidden="true"></span>
+                </label>
+            </div>
+
+            <div class="checkbox-group">
+                <label class="checkbox-label">
+                    <span class="checkbox-text">
+                        <strong>Out of Stock Alert Emails</strong>
+                        <span style="font-size: 0.9rem; color: var(--text-secondary);">
+                            Send an email when items are completely out of stock.
+                        </span>
+                    </span>
+                    <input type="checkbox" 
+                           name="no_stock_alert_enabled" 
+                           id="no_stock_alert_enabled"
+                           class="toggle-input"
+                           {% if not config or config.no_stock_alert_enabled %}checked{% endif %}>
+                    <span class="checkbox-custom" aria-hidden="true"></span>
+                </label>
+            </div>
+            <div id="toggleResult"></div>
+
             <!-- TLS Checkbox -->
             <div class="checkbox-group">
-                <input type="checkbox" 
-                       name="use_tls" 
-                       id="use_tls"
-                       {% if config.use_tls %}checked{% endif %}
-                       style="display: none;">
-                <label for="use_tls" class="checkbox-label">
-                    <div class="checkbox-custom"></div>
-                    <div>
+                <label class="checkbox-label">
+                    <span class="checkbox-text">
                         <strong>Use TLS (Transport Layer Security)</strong>
-                        <div style="font-size: 0.9rem; color: var(--text-secondary); margin-top: 4px;">
+                        <span style="font-size: 0.9rem; color: var(--text-secondary);">
                             Recommended for secure email transmission. Required for most modern email providers.
-                        </div>
-                    </div>
+                        </span>
+                    </span>
+                    <input type="checkbox" 
+                           name="use_tls" 
+                           id="use_tls"
+                           class="toggle-input"
+                           {% if config.use_tls %}checked{% endif %}>
+                    <span class="checkbox-custom" aria-hidden="true"></span>
                 </label>
             </div>
 
@@ -645,7 +813,7 @@
                     <i class="fas fa-save"></i>
                     Save Configuration
                 </button>
-                <button type="button" class="btn btn-secondary" onclick="window.location.href='{% url 'dashboard' %}'">
+                <button type="button" class="btn btn-secondary" onclick='window.location.href="{% url "dashboard" %}"'>
                     <i class="fas fa-times"></i>
                     Cancel
                 </button>
@@ -759,6 +927,92 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    // Auto-save toggle switches (no page refresh)
+    if (form) {
+        const toggles = form.querySelectorAll('.toggle-input');
+        const toggleResult = document.getElementById('toggleResult');
+        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
+
+        const setToggleResult = (ok, message) => {
+            if (!toggleResult) return;
+            toggleResult.innerHTML = `
+                <div class="status-indicator ${ok ? 'status-connected' : 'status-disconnected'}">
+                    <i class="fas ${ok ? 'fa-check-circle' : 'fa-exclamation-circle'}"></i>
+                    ${message}
+                </div>
+            `;
+            setTimeout(() => {
+                toggleResult.innerHTML = '';
+            }, 4000);
+        };
+
+        const setTogglesDisabled = (disabled) => {
+            toggles.forEach(t => t.disabled = disabled);
+        };
+
+        const updateStatusPill = (id, enabled) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.textContent = enabled ? 'Enabled' : 'Disabled';
+            el.classList.remove('success', 'muted');
+            el.classList.add(enabled ? 'success' : 'muted');
+        };
+
+        const syncStatusBadges = () => {
+            const accessDeniedToggle = document.getElementById('access_denied_alert_enabled');
+            const lowStockToggle = document.getElementById('low_stock_alert_enabled');
+            const noStockToggle = document.getElementById('no_stock_alert_enabled');
+
+            updateStatusPill('statusAccessDenied', accessDeniedToggle?.checked);
+            updateStatusPill('statusLowStock', lowStockToggle?.checked);
+            updateStatusPill('statusNoStock', noStockToggle?.checked);
+        };
+
+        const buildPayload = () => {
+            const payload = new URLSearchParams();
+            payload.set('toggle_only', '1');
+            toggles.forEach(t => {
+                payload.set(t.name, t.checked ? 'on' : '');
+            });
+            return payload;
+        };
+
+        toggles.forEach(toggle => {
+            toggle.addEventListener('change', async function() {
+                if (!form.checkValidity()) {
+                    alert('Please fill required SMTP fields first, then save once.');
+                    toggle.checked = !toggle.checked;
+                    return;
+                }
+
+                setTogglesDisabled(true);
+
+                try {
+                    const res = await fetch(window.location.href, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/x-www-form-urlencoded",
+                            "X-CSRFToken": csrfToken,
+                            "X-Requested-With": "XMLHttpRequest"
+                        },
+                        body: buildPayload().toString()
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (res.ok && data.success) {
+                        syncStatusBadges();
+                        setToggleResult(true, data.message || "Saved.");
+                    } else {
+                        setToggleResult(false, data.message || "Failed to save.");
+                    }
+                } catch (err) {
+                    setToggleResult(false, "Failed to save.");
+                } finally {
+                    setTogglesDisabled(false);
+                }
+            });
+        });
+    }
+
     // Test email functionality
     const sendTestBtn = document.getElementById('sendTestBtn');
     const testEmailInput = document.getElementById('testEmail');
@@ -856,7 +1110,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Reset checkbox visual state
                 const tlsCheckbox = document.getElementById('use_tls');
                 if (tlsCheckbox && !tlsCheckbox.checked) {
-                    tlsCheckbox.checked = {% if config.use_tls %}true{% else %}false{% endif %};
+                    const tlsDefault = "{{ config.use_tls|yesno:'true,false' }}" === "true";
+                    tlsCheckbox.checked = tlsDefault;
                 }
             }
         });

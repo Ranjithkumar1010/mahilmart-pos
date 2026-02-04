@@ -5,6 +5,8 @@
 {% endblock %}
 
 {% block content %}
+<div class="page-section form-page">
+  <div class="form-wrap">
 <div class="container mt-4">
   <h2>
     {% if supplier %}Edit Supplier{% else %}Add New Supplier{% endif %}
@@ -172,4 +174,8 @@
     <a href="{% url 'suppliers' %}" class="btn btn-secondary">Cancel</a>
   </form>
 </div>
+
+  </div>
+</div>
 {% endblock %}
+

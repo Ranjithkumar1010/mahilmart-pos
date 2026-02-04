@@ -1078,7 +1078,7 @@ body {
             <button type="button" onclick="location.reload()" class="action-button reset">
                 🔄 RESET
             </button>
-            <button type="button" onclick="location.href='{% url 'order_list' %}'" class="action-button">
+            <button type="button" onclick='location.href="{% url "order_list" %}"' class="action-button">
                 📋 VIEW ORDERS
             </button>
         </div>
@@ -1508,7 +1508,7 @@ function initializeTable() {
         // ===============================
         // ✅ TODAY POINTS CALCULATION (FIX)
         // ===============================
-        const amountForOnePoint = {{ amount_for_one_point|floatformat:2 }};
+        const amountForOnePoint = parseFloat('{{ amount_for_one_point|floatformat:2|default:"0" }}') || 0;
         const todayPoints = Math.round((totalAfterDiscount / amountForOnePoint) * 100) / 100;
 
         // Update today's points
@@ -1834,8 +1834,10 @@ function initializeTable() {
                         return;
                     }
 
+                    // Low stock should not block billing; only warn if you want.
+                    // Keeping it non-blocking to allow billing until stock is 0.
                     if (data.low_stock_warning) {
-                        alert(data.warning_message);
+                        console.warn(data.warning_message);
                     }
 
                     // Enforce strict batch-wise limit
@@ -2490,3 +2492,4 @@ function editCustomer() {
 }
 </script>
 {% endblock %}
+

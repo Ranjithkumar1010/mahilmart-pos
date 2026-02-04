@@ -78,6 +78,43 @@ from django.http import JsonResponse
 from django.template.loader import render_to_string
 from barcode import Code128
 from barcode.writer import ImageWriter
+
+LOW_STOCK_THRESHOLD = float(getattr(settings, "LOW_STOCK_THRESHOLD", 10.0))
+
+
+def _stock_qty_expr():
+    return Case(
+        When(
+            Q(inventory__unit__icontains='bulk')
+            | Q(unit__icontains='bulk')
+            | Q(inventory__split_unit__gt=0, inventory__quantity__lte=0),
+            then=Coalesce(F('inventory__split_unit'), Value(0.0)),
+        ),
+        default=Coalesce(F('inventory__quantity'), Value(0.0)),
+        output_field=FloatField(),
+    )
+
+
+def _annotate_min_stock(qs):
+    return (
+        qs.annotate(
+            min_stock_num=Case(
+                When(
+                    min_stock__regex=r'^\d+(\.\d+)?$',
+                    then=Cast('min_stock', FloatField())
+                ),
+                default=Value(0.0),
+                output_field=FloatField(),
+            )
+        )
+        .annotate(
+            min_stock_val=Case(
+                When(min_stock_num__gt=0, then=F('min_stock_num')),
+                default=Value(LOW_STOCK_THRESHOLD),
+                output_field=FloatField(),
+            )
+        )
+    )
 from .models import (
     Supplier,
     Customer,
@@ -258,6 +295,7 @@ def access_denied(request):
     email_sent = False
     email_error = None
     support_email = None
+    email_disabled = False
 
     try:
         # Apply database email settings (if configured)
@@ -265,6 +303,25 @@ def access_denied(request):
 
         config = EmailConfig.objects.filter(is_active=True).first()
         recipients = []
+
+        if config and not config.access_denied_alert_enabled:
+            if config.alert_recipients:
+                recipients = [e.strip() for e in config.alert_recipients.split(",") if e.strip()]
+            if not recipients and config:
+                fallback = config.default_from_email or config.email_host_user
+                if fallback:
+                    recipients = [fallback]
+            if not recipients:
+                recipients = [email for _, email in settings.ADMINS] if getattr(settings, "ADMINS", None) else []
+            support_email = recipients[0] if recipients else None
+            email_disabled = True
+            return render(request, "access_denied.html", {
+                "now": now,
+                "support_email": support_email,
+                "email_sent": False,
+                "email_error": None,
+                "email_disabled": True,
+            }, status=403)
 
         if config and config.alert_recipients:
             recipients = [e.strip() for e in config.alert_recipients.split(",") if e.strip()]
@@ -336,6 +393,7 @@ def access_denied(request):
         "support_email": support_email,
         "email_sent": email_sent,
         "email_error": email_error,
+        "email_disabled": email_disabled,
     }, status=403)
 
 
@@ -1187,15 +1245,13 @@ def dashboard_view(request):
         (today_sales - yesterday_sales) / yesterday_sales * 100
         if yesterday_sales > 0 else 0
     )
+    if change_percentage > 100:
+        change_percentage = 100
 
     # ======================================================
     # STOCK CALCULATION
     # ======================================================
-    stock_qty_expr = Case(
-        When(inventory__unit__icontains='bulk', then=F('inventory__split_unit')),
-        default=F('inventory__quantity'),
-        output_field=FloatField(),
-    )
+    stock_qty_expr = _stock_qty_expr()
 
     stock_aggregates = (
         Item.objects.values('code', 'item_name', 'unit', 'min_stock')
@@ -1204,17 +1260,10 @@ def dashboard_view(request):
                 Sum(stock_qty_expr),
                 Value(0.0),
                 output_field=FloatField()
-            ),
-            min_stock_val=Case(
-                When(
-                    min_stock__regex=r'^\d+(\.\d+)?$',
-                    then=Cast('min_stock', FloatField())
-                ),
-                default=Value(10.0),
-                output_field=FloatField(),
             )
         )
     )
+    stock_aggregates = _annotate_min_stock(stock_aggregates)
 
     no_stock_items = stock_aggregates.filter(total_qty__lte=0)
     no_stock_count = no_stock_items.count()
@@ -1225,6 +1274,9 @@ def dashboard_view(request):
     )
     low_stock_count = low_stock_items.count()
 
+    # Stock alert email (once per day)
+    _send_stock_alert(request, low_stock_items, no_stock_items, low_stock_count, no_stock_count)
+
     # ======================================================
     # DATE RANGE FILTER FOR BILLS
     # ======================================================
@@ -1233,18 +1285,17 @@ def dashboard_view(request):
 
     bills_filtered = bills_qs.select_related('customer')
 
-    if start_date and end_date:
-        start = parse_date(start_date)
-        end = parse_date(end_date)
+    if start_date or end_date:
+        start = parse_date(start_date) if start_date else None
+        end = parse_date(end_date) if end_date else None
 
-        if start and end:
-            if start == end:
-                bills_filtered = bills_filtered.filter(created_at__date=start)
-            else:
-                bills_filtered = bills_filtered.filter(
-                    created_at__date__gte=start,
-                    created_at__date__lte=end
-                )
+        if start and end and start == end:
+            bills_filtered = bills_filtered.filter(created_at__date=start)
+        else:
+            if start:
+                bills_filtered = bills_filtered.filter(created_at__date__gte=start)
+            if end:
+                bills_filtered = bills_filtered.filter(created_at__date__lte=end)
 
     # ======================================================
     # HELPER — TOTAL RECEIVED
@@ -1261,7 +1312,7 @@ def dashboard_view(request):
     # RECENT BILLS LIST
     # ======================================================
     recent_bills = []
-    for bill in bills_qs.select_related('customer').order_by('-created_at'):
+    for bill in bills_filtered.select_related('customer').order_by('-created_at'):
         total_received = calculate_total_received(bill)
         pending = bill.total_amount - total_received
 
@@ -1539,6 +1590,63 @@ def dashboard_view(request):
     })
 
 
+@allow_dashboard
+@login_required(login_url='home')
+def dashboard_transactions_api(request):
+    user = request.user
+
+    if not user.is_authenticated or '_auth_user_id' not in request.session:
+        return JsonResponse({"error": "unauthorized"}, status=401)
+
+    bills_qs = Billing.objects.all() if user.is_superuser else Billing.objects.filter(created_by=user)
+
+    start_date = request.GET.get('start_date')
+    end_date = request.GET.get('end_date')
+
+    bills_filtered = bills_qs.select_related('customer')
+
+    if start_date or end_date:
+        start = parse_date(start_date) if start_date else None
+        end = parse_date(end_date) if end_date else None
+
+        if start and end and start == end:
+            bills_filtered = bills_filtered.filter(created_at__date=start)
+        else:
+            if start:
+                bills_filtered = bills_filtered.filter(created_at__date__gte=start)
+            if end:
+                bills_filtered = bills_filtered.filter(created_at__date__lte=end)
+
+    def calculate_total_received(bill):
+        payments_total = BillingPayment.objects.filter(billing=bill).aggregate(
+            total=Sum('new_payment')
+        )['total'] or Decimal('0')
+
+        discount_amount = bill.discount_amt or Decimal('0')
+        return (bill.received or Decimal('0')) + payments_total + discount_amount
+
+    transactions = []
+    for bill in bills_filtered.order_by('-created_at'):
+        total_received = calculate_total_received(bill)
+        pending = bill.total_amount - total_received
+        bill_date = localtime(bill.date).strftime('%d %b %Y %H:%M') if bill.date else ''
+
+        transactions.append({
+            'id': bill.id,
+            'bill_no': bill.bill_no,
+            'received_amount': float(total_received or 0),
+            'sale_amount': float(bill.total_amount or 0),
+            'pending_amount': float(pending or 0),
+            'date': bill_date,
+            'customer_name': bill.customer.name if bill.customer else 'Walk-in',
+            'customer_phone': bill.customer.cell if bill.customer else 'N/A',
+            'created_by': bill.created_by.username if bill.created_by else '',
+            'status': 'Pending' if pending > 0 else 'Completed',
+        })
+
+    return JsonResponse({"transactions": transactions})
+
+
 @allow_settings
 def computer_alias_view(request):
 
@@ -1670,9 +1778,36 @@ def generate_report(request):
         )
 
     elif report_type == "Inventory Report (Low Stock / Out of Stock)":
+        # Keep inventory report consistent with dashboard stock calculations
+        stock_qty_expr = _stock_qty_expr()
+
+        stock_aggregates = (
+            Item.objects.values('code', 'item_name', 'unit', 'min_stock')
+            .annotate(
+                total_qty=Coalesce(
+                    Sum(stock_qty_expr),
+                    Value(0.0),
+                    output_field=FloatField()
+                )
+            )
+        )
+        stock_aggregates = _annotate_min_stock(stock_aggregates)
+
+        no_stock_qs = stock_aggregates.filter(total_qty__lte=0)
+        low_stock_qs = stock_aggregates.filter(
+            total_qty__gt=0,
+            total_qty__lt=F('min_stock_val')
+        )
+
         data = {
-            "low_stock": list(Inventory.objects.filter(quantity__lt=10).values("item_name", "quantity")),
-            "out_of_stock": list(Inventory.objects.filter(quantity__lte=0).values("item_name")),
+            "low_stock": list(
+                low_stock_qs.values("code", "item_name", "unit", "total_qty", "min_stock_val")
+            ),
+            "out_of_stock": list(
+                no_stock_qs.values("code", "item_name", "unit", "total_qty", "min_stock_val")
+            ),
+            "low_stock_count": low_stock_qs.count(),
+            "out_of_stock_count": no_stock_qs.count(),
         }
 
     elif report_type == "Revenue Report (Sales, Discounts, Returns)":
@@ -1715,22 +1850,24 @@ def reports_page(request):
         Item.objects
         .annotate(
             total_qty=Coalesce(
-                Sum('inventory__quantity'),
+                Sum(_stock_qty_expr()),
                 Value(0.0),
                 output_field=FloatField()
             )
         )
-        .values("code", "item_name", "total_qty")
     )
+    inventory_summary = _annotate_min_stock(inventory_summary)
 
     low_stock = list(
         inventory_summary
-        .filter(total_qty__gt=0, total_qty__lt=10)
+        .filter(total_qty__gt=0, total_qty__lt=F('min_stock_val'))
+        .values("code", "item_name", "total_qty", "min_stock_val")
         .order_by("total_qty")
     )
     out_of_stock = list(
         inventory_summary
         .filter(total_qty__lte=0)
+        .values("code", "item_name", "total_qty", "min_stock_val")
         .order_by("item_name")
     )
 
@@ -2204,7 +2341,7 @@ def get_item_info(request):
         else:
             merged_batches.append(row)
 
-        if available < 10:
+        if available < LOW_STOCK_THRESHOLD:
             low_stock_batches.append(f"{inv.batch_no} (qty: {available})")
 
     # --------------------------------------------------
@@ -6287,6 +6424,27 @@ def email_settings_view(request):
     config = EmailConfig.objects.filter(is_active=True).first()
 
     if request.method == "POST":
+        if request.POST.get("toggle_only") == "1":
+            if not config:
+                return JsonResponse({
+                    "success": False,
+                    "message": "Save SMTP settings first."
+                }, status=400)
+
+            config.access_denied_alert_enabled = request.POST.get("access_denied_alert_enabled") == "on"
+            config.low_stock_alert_enabled = request.POST.get("low_stock_alert_enabled") == "on"
+            config.no_stock_alert_enabled = request.POST.get("no_stock_alert_enabled") == "on"
+            config.alert_enabled = config.low_stock_alert_enabled or config.no_stock_alert_enabled
+            config.use_tls = request.POST.get("use_tls") == "on"
+            config.save()
+
+            apply_email_settings()
+
+            return JsonResponse({
+                "success": True,
+                "message": "Alert settings updated."
+            })
+
         email_host = (request.POST.get("email_host") or "").strip()
         email_port_raw = (request.POST.get("email_port") or "").strip()
         use_tls = request.POST.get("use_tls") == "on"
@@ -6294,6 +6452,10 @@ def email_settings_view(request):
         email_pass = (request.POST.get("email_host_password") or "").strip()
         default_from = (request.POST.get("default_from_email") or "").strip()
         alert_recipients = (request.POST.get("alert_recipients") or "").strip()
+        access_denied_alert_enabled = request.POST.get("access_denied_alert_enabled") == "on"
+        low_stock_alert_enabled = request.POST.get("low_stock_alert_enabled") == "on"
+        no_stock_alert_enabled = request.POST.get("no_stock_alert_enabled") == "on"
+        alert_enabled = low_stock_alert_enabled or no_stock_alert_enabled
 
         if not email_port_raw.isdigit():
             messages.error(request, "Email port must be a valid number.")
@@ -6309,6 +6471,10 @@ def email_settings_view(request):
                 config.email_host_password = email_pass
             config.default_from_email = default_from
             config.alert_recipients = alert_recipients
+            config.alert_enabled = alert_enabled
+            config.access_denied_alert_enabled = access_denied_alert_enabled
+            config.low_stock_alert_enabled = low_stock_alert_enabled
+            config.no_stock_alert_enabled = no_stock_alert_enabled
             config.is_active = True
             config.save()
             EmailConfig.objects.exclude(pk=config.pk).update(is_active=False)
@@ -6325,6 +6491,10 @@ def email_settings_view(request):
                 email_host_password=email_pass,
                 default_from_email=default_from,
                 alert_recipients=alert_recipients,
+                alert_enabled=alert_enabled,
+                access_denied_alert_enabled=access_denied_alert_enabled,
+                low_stock_alert_enabled=low_stock_alert_enabled,
+                no_stock_alert_enabled=no_stock_alert_enabled,
                 is_active=True
             )
 
@@ -6332,8 +6502,35 @@ def email_settings_view(request):
         messages.success(request, "Email settings saved successfully.")
         return redirect("email_settings")
 
+    current_from_email = None
+    current_recipients = []
+    access_denied_enabled = True
+    low_stock_enabled = True
+    no_stock_enabled = True
+
+    if config:
+        access_denied_enabled = config.access_denied_alert_enabled
+        low_stock_enabled = config.low_stock_alert_enabled
+        no_stock_enabled = config.no_stock_alert_enabled
+        current_from_email = config.default_from_email or config.email_host_user
+        if config.alert_recipients:
+            current_recipients = [e.strip() for e in config.alert_recipients.split(",") if e.strip()]
+        elif current_from_email:
+            current_recipients = [current_from_email]
+
+    if not current_from_email:
+        current_from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(settings, "EMAIL_HOST_USER", None)
+
+    if not current_recipients:
+        current_recipients = [email for _, email in settings.ADMINS] if getattr(settings, "ADMINS", None) else []
+
     return render(request, "email_settings.html", {
-        "config": config
+        "config": config,
+        "current_from_email": current_from_email or "Not set",
+        "current_recipients": ", ".join(current_recipients) if current_recipients else "Not set",
+        "access_denied_enabled": access_denied_enabled,
+        "low_stock_enabled": low_stock_enabled,
+        "no_stock_enabled": no_stock_enabled,
     })
 
 
@@ -6342,6 +6539,175 @@ def _safe_log_email(**kwargs):
         EmailLog.objects.create(**kwargs)
     except Exception as exc:
         print("Email log failed:", exc)
+
+
+def _send_stock_alert(request, low_stock_items, no_stock_items, low_stock_count, no_stock_count):
+    config = EmailConfig.objects.filter(is_active=True).first()
+    low_enabled = True
+    no_enabled = True
+
+    if config:
+        low_enabled = config.low_stock_alert_enabled
+        no_enabled = config.no_stock_alert_enabled
+
+    effective_low_count = low_stock_count if low_enabled else 0
+    effective_no_count = no_stock_count if no_enabled else 0
+
+    if effective_low_count <= 0 and effective_no_count <= 0:
+        return
+
+    today = now().date()
+    latest_sent = EmailLog.objects.filter(
+        event_type="system",
+        subject__startswith="Stock Alert",
+        status="sent",
+        created_at__date=today
+    ).order_by("-created_at").first()
+
+    if latest_sent:
+        match = re.search(r"Stock Alert:\s*(\d+)\s*Out of Stock,\s*(\d+)\s*Low Stock", latest_sent.subject)
+        if match:
+            last_out = int(match.group(1))
+            last_low = int(match.group(2))
+            if last_out == effective_no_count and last_low == effective_low_count:
+                return
+
+    # Prepare item snapshots (limit to avoid huge emails)
+    low_items = list(low_stock_items[:50]) if low_enabled else []
+    no_items = list(no_stock_items[:50]) if no_enabled else []
+
+    subject = f"Stock Alert: {effective_no_count} Out of Stock, {effective_low_count} Low Stock"
+
+    def build_rows(items, is_low=False):
+        rows = ""
+        for item in items:
+            code = item.get("code", "-")
+            name = item.get("item_name", "-")
+            unit = item.get("unit", "-")
+            qty = item.get("total_qty", 0)
+            min_stock = item.get("min_stock_val", "-")
+            rows += f"""
+                <tr>
+                    <td style="padding:8px; border:1px solid #e2e8f0;">{code}</td>
+                    <td style="padding:8px; border:1px solid #e2e8f0;">{name}</td>
+                    <td style="padding:8px; border:1px solid #e2e8f0;">{unit}</td>
+                    <td style="padding:8px; border:1px solid #e2e8f0; text-align:right;">{qty}</td>
+                    <td style="padding:8px; border:1px solid #e2e8f0; text-align:right;">{min_stock}</td>
+                </tr>
+            """
+        if not rows:
+            rows = f"""
+                <tr>
+                    <td colspan="5" style="padding:10px; border:1px solid #e2e8f0; text-align:center; color:#64748b;">
+                        {"No low stock items." if is_low else "No out of stock items."}
+                    </td>
+                </tr>
+            """
+        return rows
+
+    html_message = f"""
+    <div style="font-family:Segoe UI, sans-serif; background:#f8fafc; padding:24px;">
+        <div style="max-width:760px; margin:0 auto; background:#ffffff; border-radius:12px; border:1px solid #e2e8f0; overflow:hidden;">
+            <div style="background:linear-gradient(135deg,#0f172a,#1e293b); color:#fff; padding:16px 20px;">
+                <h2 style="margin:0; font-size:18px;">Stock Alert</h2>
+                <p style="margin:6px 0 0; font-size:13px; opacity:0.9;">{now().strftime('%d %b %Y %H:%M')}</p>
+            </div>
+            <div style="padding:20px;">
+                <p style="margin:0 0 16px; color:#334155;">
+                    There are <strong>{effective_no_count}</strong> out of stock items and
+                    <strong>{effective_low_count}</strong> low stock items.
+                </p>
+
+                <h3 style="margin:16px 0 8px; font-size:15px; color:#b91c1c;">Out of Stock</h3>
+                <table style="width:100%; border-collapse:collapse; font-size:13px;">
+                    <thead>
+                        <tr style="background:#fef2f2; color:#991b1b;">
+                            <th style="padding:8px; border:1px solid #e2e8f0; text-align:left;">Code</th>
+                            <th style="padding:8px; border:1px solid #e2e8f0; text-align:left;">Item</th>
+                            <th style="padding:8px; border:1px solid #e2e8f0; text-align:left;">Unit</th>
+                            <th style="padding:8px; border:1px solid #e2e8f0; text-align:right;">Qty</th>
+                            <th style="padding:8px; border:1px solid #e2e8f0; text-align:right;">Min Stock</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {build_rows(no_items)}
+                    </tbody>
+                </table>
+
+                <h3 style="margin:20px 0 8px; font-size:15px; color:#b45309;">Low Stock</h3>
+                <table style="width:100%; border-collapse:collapse; font-size:13px;">
+                    <thead>
+                        <tr style="background:#fffbeb; color:#92400e;">
+                            <th style="padding:8px; border:1px solid #e2e8f0; text-align:left;">Code</th>
+                            <th style="padding:8px; border:1px solid #e2e8f0; text-align:left;">Item</th>
+                            <th style="padding:8px; border:1px solid #e2e8f0; text-align:left;">Unit</th>
+                            <th style="padding:8px; border:1px solid #e2e8f0; text-align:right;">Qty</th>
+                            <th style="padding:8px; border:1px solid #e2e8f0; text-align:right;">Min Stock</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {build_rows(low_items, is_low=True)}
+                    </tbody>
+                </table>
+
+                <p style="margin:18px 0 0; font-size:12px; color:#94a3b8;">
+                    This alert is generated automatically by MahilMart POS.
+                </p>
+            </div>
+        </div>
+    </div>
+    """
+
+    email_sent = False
+    email_error = None
+    recipients = []
+
+    try:
+        apply_email_settings()
+
+        if config and config.alert_recipients:
+            recipients = [e.strip() for e in config.alert_recipients.split(",") if e.strip()]
+
+        if not recipients and config:
+            fallback = config.default_from_email or config.email_host_user
+            if fallback:
+                recipients = [fallback]
+
+        if not recipients:
+            recipients = [email for _, email in settings.ADMINS] if getattr(settings, "ADMINS", None) else []
+
+        from_email = None
+        if config:
+            from_email = config.default_from_email or config.email_host_user
+        if not from_email:
+            from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(settings, "EMAIL_HOST_USER", None)
+
+        if recipients and from_email:
+            email = EmailMultiAlternatives(
+                subject=subject,
+                body="",
+                from_email=from_email,
+                to=recipients,
+            )
+            email.attach_alternative(html_message, "text/html")
+            email.send(fail_silently=False)
+            email_sent = True
+        else:
+            email_error = "Email settings or recipients are not configured."
+
+    except Exception as exc:
+        email_error = str(exc)
+
+    _safe_log_email(
+        event_type="system",
+        subject=subject,
+        recipients=", ".join(recipients),
+        status="sent" if email_sent else "failed",
+        error_message=email_error,
+        triggered_by=request.user if request and request.user.is_authenticated else None,
+        request_path=request.path if request else None,
+        ip_address=request.META.get("REMOTE_ADDR") if request else None,
+    )
 
 
 @login_required

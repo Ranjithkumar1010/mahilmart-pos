@@ -157,6 +157,8 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+LOW_STOCK_THRESHOLD = 10
+
 
 ADMINS = [
     ("POS Admin", "mahiltechlab.ops@gmail.com"),

@@ -39,6 +39,7 @@ urlpatterns = [
 
     # dashboard page
     path('dashboard/', views.dashboard_view, name='dashboard'),
+    path('dashboard/transactions/', views.dashboard_transactions_api, name='dashboard_transactions_api'),
     path('computer-alias/', views.computer_alias_view, name='computer_alias'),
 
     #point config

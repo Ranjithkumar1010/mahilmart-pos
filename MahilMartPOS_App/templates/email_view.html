@@ -149,6 +149,18 @@
                 <div class="config-value">{{ config.alert_recipients|default:"Not set" }}</div>
             </div>
             <div class="config-item">
+                <div class="config-label">Access Denied Alerts</div>
+                <div class="config-value">{% if config.access_denied_alert_enabled %}Enabled{% else %}Disabled{% endif %}</div>
+            </div>
+            <div class="config-item">
+                <div class="config-label">Low Stock Alerts</div>
+                <div class="config-value">{% if config.low_stock_alert_enabled %}Enabled{% else %}Disabled{% endif %}</div>
+            </div>
+            <div class="config-item">
+                <div class="config-label">Out of Stock Alerts</div>
+                <div class="config-value">{% if config.no_stock_alert_enabled %}Enabled{% else %}Disabled{% endif %}</div>
+            </div>
+            <div class="config-item">
                 <div class="config-label">Last Updated</div>
                 <div class="config-value">{{ config.updated_at }}</div>
             </div>

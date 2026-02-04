@@ -1154,6 +1154,10 @@ class EmailConfig(models.Model):
     email_host_password = models.CharField(max_length=255)
     default_from_email = models.EmailField()
     alert_recipients = models.CharField(max_length=500, blank=True, null=True)
+    alert_enabled = models.BooleanField(default=True)
+    access_denied_alert_enabled = models.BooleanField(default=True)
+    low_stock_alert_enabled = models.BooleanField(default=True)
+    no_stock_alert_enabled = models.BooleanField(default=True)
 
     is_active = models.BooleanField(default=True)
     updated_at = models.DateTimeField(auto_now=True)

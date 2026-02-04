@@ -151,7 +151,9 @@
         </div>
 
         <div class="access-hint">
-            {% if email_sent %}
+            {% if email_disabled %}
+                Alert email is disabled in settings.
+            {% elif email_sent %}
                 An alert has been sent to the administrator for review.
             {% else %}
                 Alert email could not be sent. Please contact the administrator.

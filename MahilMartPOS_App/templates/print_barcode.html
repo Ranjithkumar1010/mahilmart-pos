@@ -1,6 +1,8 @@
 {% extends 'base.html' %}
 
 {% block content %}
+<div class="page-section form-page">
+  <div class="form-wrap">
 <div class="container mt-4" style="max-width: 2500px;">
     <h2>Print Barcode - Multiple Items</h2>
     <form method="POST" action="{% url 'print_barcode' %}">
@@ -202,4 +204,8 @@ document.addEventListener("input", function(e) {
         });
 });
 </script>
+
+  </div>
+</div>
 {% endblock %}
+
